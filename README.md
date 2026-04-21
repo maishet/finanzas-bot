@@ -160,6 +160,23 @@ pip install -r requirements.txt
 
 ### 3. Configurar variables de entorno
 
+#### Opción recomendada (rápida)
+
+1. Copia el archivo de ejemplo:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+2. Abre `.env` y reemplaza los valores placeholder.
+
+3. Define el modo de ejecución según tu entorno:
+
+- Local: `BOT_MODE=polling`
+- Render: `BOT_MODE=webhook` y configura `WEBHOOK_URL`
+
+#### Opción manual
+
 Crear un archivo `.env` con algo similar a esto:
 
 ```env
