@@ -444,8 +444,30 @@ def main():
     else:
         logger.warning("JobQueue no disponible; recordatorios automáticos desactivados.")
     
-    logger.info("Bot iniciado con todos los comandos.")
-    app.run_polling()
+    if config.BOT_MODE == "webhook":
+        if not config.FULL_WEBHOOK_URL:
+            raise ValueError(
+                "BOT_MODE=webhook requiere WEBHOOK_URL o RENDER_EXTERNAL_URL configurado."
+            )
+
+        logger.info(
+            "Iniciando en modo webhook | port=%s path=%s url=%s",
+            config.PORT,
+            config.WEBHOOK_PATH,
+            config.FULL_WEBHOOK_URL,
+        )
+
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=config.PORT,
+            url_path=config.WEBHOOK_PATH.lstrip("/"),
+            webhook_url=config.FULL_WEBHOOK_URL,
+            secret_token=config.WEBHOOK_SECRET_TOKEN,
+            drop_pending_updates=True,
+        )
+    else:
+        logger.info("Iniciando en modo polling.")
+        app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()

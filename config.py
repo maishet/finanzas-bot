@@ -25,3 +25,22 @@ BASE_CURRENCY = "PEN"
 
 # Tipo de cambio USD a PEN (puedes actualizarlo manualmente o más adelante consumir una API)
 EXCHANGE_RATE = float(os.getenv("EXCHANGE_RATE", "3.44"))
+
+# Modo de ejecución: polling (local) o webhook (servidor)
+BOT_MODE = os.getenv("BOT_MODE", "polling").strip().lower()
+
+# Configuración para Webhook (Render u otro hosting)
+PORT = int(os.getenv("PORT", "10000"))
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram-webhook").strip()
+if not WEBHOOK_PATH.startswith("/"):
+    WEBHOOK_PATH = f"/{WEBHOOK_PATH}"
+
+# URL pública del servicio (prioriza WEBHOOK_URL y luego RENDER_EXTERNAL_URL)
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL")
+WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "").strip() or None
+
+if WEBHOOK_BASE_URL:
+    WEBHOOK_BASE_URL = WEBHOOK_BASE_URL.rstrip("/")
+    FULL_WEBHOOK_URL = f"{WEBHOOK_BASE_URL}{WEBHOOK_PATH}"
+else:
+    FULL_WEBHOOK_URL = None
