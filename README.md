@@ -190,6 +190,64 @@ EXCHANGE_RATE=3.44
 
 Coloca el archivo `credentials.json` en la raíz del proyecto.
 
+## Cómo obtener `credentials.json` (Google Cloud Console)
+
+Este paso es obligatorio para que el bot pueda leer y escribir en Google Sheets.
+
+### 1. Crear o elegir un proyecto en Google Cloud
+
+1. Ve a Google Cloud Console.
+2. Crea un proyecto nuevo o selecciona uno existente.
+
+### 2. Habilitar APIs necesarias
+
+1. En el proyecto, entra a APIs y servicios.
+2. Habilita estas APIs:
+- Google Sheets API
+- Google Drive API
+
+### 3. Crear una cuenta de servicio
+
+1. Ve a IAM y administración > Cuentas de servicio.
+2. Crea una cuenta de servicio (ejemplo: `finanzas-bot-sa`).
+3. Finaliza la creación.
+
+### 4. Generar la clave JSON
+
+1. Abre la cuenta de servicio creada.
+2. Ve a la pestaña Claves.
+3. Agrega una nueva clave.
+4. Selecciona tipo JSON.
+5. Descarga el archivo.
+
+Renombra ese archivo a `credentials.json` y colócalo en la raíz del proyecto.
+
+### 5. Compartir tu Google Sheet con la cuenta de servicio
+
+1. Abre el archivo JSON descargado.
+2. Copia el valor de `client_email`.
+3. Ve a tu Google Sheet.
+4. Pulsa Compartir y agrega ese correo como Editor.
+
+Si no haces este paso, el bot fallará con errores de permisos aunque el JSON sea válido.
+
+### 6. Configurar el ID del Sheet
+
+1. Abre tu Google Sheet en el navegador.
+2. Copia el ID desde la URL:
+
+```text
+https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=0
+```
+
+3. Coloca ese valor en `SPREADSHEET_ID` en tu `.env`.
+
+### Seguridad recomendada
+
+1. Nunca subas `credentials.json` a GitHub.
+2. Verifica que `.gitignore` incluya `credentials.json`.
+3. En producción (Render), usa Secret File o variable segura para manejar credenciales.
+
 ## Dependencias
 
 Las principales librerías usadas son:
