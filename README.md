@@ -39,6 +39,7 @@ y el bot se encargue de:
 - Registro de pagos de deuda desde cuentas de tipo Banco.
 - Recordatorios automáticos de deudas próximas a vencer.
 - Comando manual de recordatorios para usar cuando el servidor está en sleep.
+- Exporte en PDF del cierre mensual con gráficos y KPIs.
 - Manejo correcto de montos con formato regional, como `1.314,13`.
 
 ## Arquitectura
@@ -300,6 +301,31 @@ Ejemplo:
 ```text
 /mes 04/2026
 ```
+
+#### `/reporte [MM/AAAA]`
+
+Genera un PDF de cierre mensual con indicadores y visualizaciones.
+
+Ejemplo:
+
+```text
+/reporte 04/2026
+```
+
+Si no envías fecha, usa el mes actual.
+
+El reporte incluye:
+
+- Ingreso total del mes
+- Gasto total del mes
+- Ahorro total del mes
+- Total de transacciones
+- Categoría con mayor gasto
+- Transacción más alta
+- Gráfico de barras (ingresos, gastos, ahorro)
+- Gráfico circular de gastos por categoría
+- Ranking gráfico de cuentas con mayor uso
+- Fecha y hora de generación
 
 #### `/categoria <nombre>`
 

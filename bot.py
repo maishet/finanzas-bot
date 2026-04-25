@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, time
 from functools import wraps
-from telegram import Update
+from telegram import Update, InputFile
 from telegram.ext import Application, CommandHandler, ContextTypes
 import config
 from sheets_handler import (obtener_categorias,
@@ -10,8 +10,9 @@ from sheets_handler import (obtener_categorias,
     obtener_gasto_por_categoria, obtener_deudas_activas,
     detectar_cuenta_en_texto, obtener_tipo_cuenta,
     eliminar_transaccion, editar_transaccion, obtener_recordatorios_deudas,
-    pagar_deuda
+    pagar_deuda, obtener_datos_reporte_mensual
 )
+from report_generator import generar_reporte_mensual_pdf
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -59,6 +60,7 @@ Ejemplo: `/ingreso 1500 Sueldo quincena BCP`
 
 /resumen - Saldos de todas las cuentas y patrimonio neto
 /mes <MM/AAAA> - Balance mensual (por defecto mes actual)
+/reporte <MM/AAAA> - Exporta cierre mensual en PDF con gráficos
 /categoria <nombre> - Gasto del mes en una categoría
 /deudas - Lista de tarjetas de crédito con saldo pendiente
 /pagar <deuda_id> <monto> <cuenta_banco> [nota]
@@ -269,6 +271,40 @@ async def balance_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje += f"📤 Gastos: PEN {data['gastos']:,.2f}\n"
     mensaje += f"💵 Ahorro: PEN {data['ahorro']:,.2f}"
     await update.message.reply_text(mensaje, parse_mode="Markdown")
+
+@restricted
+async def reporte_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    mes = datetime.now().month
+    año = datetime.now().year
+
+    if args:
+        try:
+            partes = args[0].split("/")
+            if len(partes) == 2:
+                mes = int(partes[0])
+                año = int(partes[1])
+                if año < 100:
+                    año += 2000
+        except Exception:
+            await update.message.reply_text("⚠️ Formato inválido. Usa `/reporte MM/AAAA`", parse_mode="Markdown")
+            return
+
+    try:
+        datos = obtener_datos_reporte_mensual(mes, año)
+        if datos["kpis"]["total_transacciones"] == 0:
+            await update.message.reply_text(f"ℹ️ No hay transacciones para {mes:02d}/{año}.")
+            return
+
+        pdf_buffer = generar_reporte_mensual_pdf(datos)
+        filename = f"reporte_finanzas_{año}_{mes:02d}.pdf"
+        await update.message.reply_document(
+            document=InputFile(pdf_buffer, filename=filename),
+            caption=f"📄 Cierre mensual {mes:02d}/{año} generado con gráficos y KPIs.",
+        )
+    except Exception as e:
+        logger.error(f"Error generando reporte mensual: {e}")
+        await update.message.reply_text("❌ Error al generar el reporte PDF.")
 
 @restricted
 async def gasto_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -509,6 +545,7 @@ def main():
     app.add_handler(CommandHandler("ingreso", procesar_ingreso))
     app.add_handler(CommandHandler("resumen", resumen))
     app.add_handler(CommandHandler("mes", balance_mes))
+    app.add_handler(CommandHandler("reporte", reporte_mes))
     app.add_handler(CommandHandler("categoria", gasto_categoria))
     app.add_handler(CommandHandler("categorias", listar_categorias))
     app.add_handler(CommandHandler("deudas", deudas))

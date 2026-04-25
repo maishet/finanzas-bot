@@ -894,3 +894,109 @@ def obtener_recordatorios_deudas(dias_alerta=3, fecha_referencia=None):
 
     recordatorios.sort(key=lambda x: x["dias_restantes"])
     return recordatorios
+
+def _valor_campo(registro, *keys, default=""):
+    for key in keys:
+        if key in registro:
+            return registro.get(key)
+    return default
+
+def obtener_datos_reporte_mensual(mes=None, año=None):
+    """
+    Retorna métricas y agregados del mes para construir reportes visuales.
+    Todos los cálculos monetarios se normalizan a PEN.
+    """
+    if mes is None or año is None:
+        ahora = datetime.now()
+        mes = ahora.month
+        año = ahora.year
+
+    transacciones = trans_ws.get_all_records()
+    movimientos = []
+
+    for t in transacciones:
+        fecha_raw = _valor_campo(t, "Fecha", default="")
+        fecha_dt = parsear_fecha(fecha_raw)
+        if not fecha_dt:
+            continue
+        if fecha_dt.year != año or fecha_dt.month != mes:
+            continue
+
+        tipo = str(_valor_campo(t, "Tipo", default="")).strip().capitalize()
+        monto = parsear_numero(_valor_campo(t, "Monto", default=0))
+        moneda = str(_valor_campo(t, "Moneda", default="PEN")).upper()
+        monto_pen = convertir_a_pen(monto, moneda)
+
+        categoria = str(_valor_campo(t, "Categoría", "Categoria", default="Sin categoría")).strip() or "Sin categoría"
+        cuenta = str(_valor_campo(t, "Cuenta", default="Sin cuenta")).strip() or "Sin cuenta"
+        nota = str(_valor_campo(t, "Nota", default="")).strip()
+        tx_id = str(_valor_campo(t, "ID", default="")).strip()
+
+        movimientos.append({
+            "id": tx_id,
+            "fecha": fecha_dt,
+            "tipo": tipo,
+            "monto": monto,
+            "moneda": moneda,
+            "monto_pen": monto_pen,
+            "categoria": categoria,
+            "cuenta": cuenta,
+            "nota": nota,
+        })
+
+    ingresos = sum(m["monto_pen"] for m in movimientos if normalizar_texto(m["tipo"]) == "ingreso")
+    gastos = sum(m["monto_pen"] for m in movimientos if normalizar_texto(m["tipo"]) == "gasto")
+    ahorro = ingresos - gastos
+    total_transacciones = len(movimientos)
+
+    gastos_por_categoria = {}
+    uso_cuentas = {}
+    for m in movimientos:
+        if normalizar_texto(m["tipo"]) == "gasto":
+            gastos_por_categoria[m["categoria"]] = gastos_por_categoria.get(m["categoria"], 0.0) + m["monto_pen"]
+
+        if m["cuenta"] not in uso_cuentas:
+            uso_cuentas[m["cuenta"]] = {"conteo": 0, "monto_pen": 0.0}
+        uso_cuentas[m["cuenta"]]["conteo"] += 1
+        uso_cuentas[m["cuenta"]]["monto_pen"] += m["monto_pen"]
+
+    gastos_por_categoria = dict(
+        sorted(gastos_por_categoria.items(), key=lambda x: x[1], reverse=True)
+    )
+    uso_cuentas = dict(
+        sorted(uso_cuentas.items(), key=lambda x: x[1]["conteo"], reverse=True)
+    )
+
+    categoria_top = None
+    if gastos_por_categoria:
+        cat, val = next(iter(gastos_por_categoria.items()))
+        categoria_top = {"categoria": cat, "monto_pen": val}
+
+    transaccion_mayor = None
+    if movimientos:
+        tx = max(movimientos, key=lambda x: x["monto_pen"])
+        transaccion_mayor = {
+            "id": tx["id"],
+            "fecha": tx["fecha"].strftime("%Y-%m-%d"),
+            "tipo": tx["tipo"],
+            "categoria": tx["categoria"],
+            "cuenta": tx["cuenta"],
+            "monto_pen": tx["monto_pen"],
+        }
+
+    return {
+        "mes": mes,
+        "año": año,
+        "generado_en": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "kpis": {
+            "ingresos": ingresos,
+            "gastos": gastos,
+            "ahorro": ahorro,
+            "total_transacciones": total_transacciones,
+        },
+        "categoria_top": categoria_top,
+        "transaccion_mayor": transaccion_mayor,
+        "gastos_por_categoria": gastos_por_categoria,
+        "uso_cuentas": uso_cuentas,
+        "movimientos": movimientos,
+    }
