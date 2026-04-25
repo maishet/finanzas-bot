@@ -9,7 +9,8 @@ from sheets_handler import (obtener_categorias,
     obtener_resumen_cuentas, obtener_balance_mes,
     obtener_gasto_por_categoria, obtener_deudas_activas,
     detectar_cuenta_en_texto, obtener_tipo_cuenta,
-    eliminar_transaccion, editar_transaccion, obtener_recordatorios_deudas
+    eliminar_transaccion, editar_transaccion, obtener_recordatorios_deudas,
+    pagar_deuda
 )
 
 logging.basicConfig(
@@ -60,6 +61,10 @@ Ejemplo: `/ingreso 1500 Sueldo quincena BCP`
 /mes <MM/AAAA> - Balance mensual (por defecto mes actual)
 /categoria <nombre> - Gasto del mes en una categoría
 /deudas - Lista de tarjetas de crédito con saldo pendiente
+/pagar <deuda_id> <monto> <cuenta_banco> [nota]
+Ejemplo: `/pagar 1 250 BCP pago quincena`
+
+/recordatorios - Ver alertas de deudas por vencer (manual)
 /editar <ID> <campo> <valor> - Edita una transacción
 /eliminar <ID> - Elimina una transacción
 /categorias - Listado de categorías
@@ -392,6 +397,48 @@ async def editar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error editando transacción: {e}")
         await update.message.reply_text("❌ Error inesperado al editar transacción.")
 
+@restricted
+async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            "⚠️ Uso: `/pagar <deuda_id> <monto> <cuenta_banco> [nota]`\n"
+            "Ejemplo: `/pagar 1 250 BCP pago quincena`",
+            parse_mode="Markdown"
+        )
+        return
+
+    deuda_id = context.args[0].strip()
+    try:
+        monto = float(context.args[1].replace(",", "."))
+    except ValueError:
+        await update.message.reply_text("❌ Monto inválido.")
+        return
+
+    cuenta_banco = context.args[2].strip()
+    nota = " ".join(context.args[3:]).strip() if len(context.args) > 3 else ""
+
+    try:
+        data = pagar_deuda(
+            deuda_id=deuda_id,
+            monto=monto,
+            moneda_pago="PEN",
+            cuenta_banco=cuenta_banco,
+            nota=nota,
+        )
+        await update.message.reply_text(
+            f"✅ Pago de deuda registrado\n"
+            f"🆔 Deuda: {data['deuda_id']}\n"
+            f"💸 Pago: {data['moneda_deuda']} {data['pagado']:.2f}\n"
+            f"🏦 Cuenta: {data['cuenta']}\n"
+            f"📉 Pendiente: {data['moneda_deuda']} {data['pendiente']:.2f}\n"
+            f"🧾 TX: {data['trans_id']}"
+        )
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error pagando deuda: {e}")
+        await update.message.reply_text("❌ Error inesperado al registrar el pago de deuda.")
+
 async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
     try:
         recordatorios = obtener_recordatorios_deudas(dias_alerta=3)
@@ -423,6 +470,36 @@ async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+@restricted
+async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        recordatorios = obtener_recordatorios_deudas(dias_alerta=7)
+    except Exception as e:
+        logger.error(f"Error consultando recordatorios manuales: {e}")
+        await update.message.reply_text("❌ Error al consultar recordatorios.")
+        return
+
+    if not recordatorios:
+        await update.message.reply_text("✅ No hay deudas por vencer en los próximos 7 días.")
+        return
+
+    lineas = ["⏰ *Recordatorios de Deudas (manual)*"]
+    for r in recordatorios:
+        if r["dias_restantes"] < 0:
+            estado = f"Vencida hace {abs(r['dias_restantes'])} día(s)"
+        elif r["dias_restantes"] == 0:
+            estado = "Vence hoy"
+        else:
+            estado = f"Vence en {r['dias_restantes']} día(s)"
+
+        lineas.append(
+            f"\n• {r['descripcion']} ({r['cuenta']})\n"
+            f"  Pendiente: {r['moneda']} {r['pendiente']:,.2f}\n"
+            f"  Vencimiento: {r['vencimiento']} - {estado}"
+        )
+
+    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+
 def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -435,6 +512,9 @@ def main():
     app.add_handler(CommandHandler("categoria", gasto_categoria))
     app.add_handler(CommandHandler("categorias", listar_categorias))
     app.add_handler(CommandHandler("deudas", deudas))
+    app.add_handler(CommandHandler("pagar", pagar_deuda_cmd))
+    app.add_handler(CommandHandler("pagar_deuda", pagar_deuda_cmd))
+    app.add_handler(CommandHandler("recordatorios", recordatorios_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
 

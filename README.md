@@ -36,7 +36,9 @@ y el bot se encargue de:
 - Cálculo de deuda pendiente usando `MontoTotal`, `MontoPagado` y `FechaVencimiento`.
 - Comandos para resumen, balance mensual, categorías y deudas activas.
 - Edición y eliminación de transacciones ya registradas.
+- Registro de pagos de deuda desde cuentas de tipo Banco.
 - Recordatorios automáticos de deudas próximas a vencer.
+- Comando manual de recordatorios para usar cuando el servidor está en sleep.
 - Manejo correcto de montos con formato regional, como `1.314,13`.
 
 ## Arquitectura
@@ -307,6 +309,33 @@ Muestra el gasto acumulado de una categoría en el mes actual.
 
 Lista las deudas activas con su pendiente, vencimiento y cuenta asociada.
 
+#### `/recordatorios`
+
+Muestra alertas manuales de deudas por vencer (ventana de 7 días).
+
+Ejemplo:
+
+```text
+/recordatorios
+```
+
+#### `/pagar <deuda_id> <monto> <cuenta_banco> [nota]`
+
+Registra un pago de deuda usando una cuenta de tipo Banco.
+
+Qué hace internamente:
+
+- aumenta `MontoPagado` de la deuda
+- reduce saldo de la cuenta banco
+- crea una transacción tipo `Gasto` asociada al `DeudaID`
+- recalcula estado de deuda (`Activa`, `Pagada`, `Vencida`)
+
+Ejemplo:
+
+```text
+/pagar 1 250 BCP pago quincena
+```
+
 #### `/categorias`
 
 Muestra categorías de gasto e ingreso, junto con sus subcategorías si existen.
@@ -397,6 +426,56 @@ Comportamiento actual:
 - alerta por consola y por Telegram al usuario autorizado
 
 Si el entorno no tiene `JobQueue`, el bot avisa que los recordatorios automáticos quedaron desactivados.
+
+## Render Free: limitaciones y mitigaciones
+
+En plan gratuito de Render, el servicio puede entrar en reposo. Cuando eso ocurre:
+
+- el primer mensaje después de inactividad puede demorar (cold start)
+- Telegram reintenta el webhook, pero puede sentirse como "no responde"
+- tareas programadas de recordatorio pueden no ejecutarse de forma confiable 24/7
+
+Mitigaciones prácticas en free plan:
+
+1. Priorizar comandos manuales para validar estado:
+- `/deudas`
+- `/resumen`
+- `/recordatorios`
+
+2. Usar recordatorio manual como respaldo operativo:
+- Revisar deudas al menos una vez al día con `/deudas` o `/recordatorios`.
+
+3. Mantener tiempos de espera realistas:
+- tras inactividad, el primer request puede tardar en despertar el servicio.
+
+4. Evitar depender de eventos críticos solo en scheduler gratuito:
+- tratar alertas automáticas como ayuda, no como única fuente.
+
+## Roadmap recomendado
+
+### Fase actual (Render Free)
+
+1. Consolidar confiabilidad básica de comandos (`/gasto`, `/ingreso`, `/pagar`, `/deudas`).
+2. Fortalecer comando manual de chequeo de recordatorios (`/recordatorios`) con filtros por días.
+3. Añadir snapshots diarios en Google Sheets (hoja histórica simple) para auditoría.
+4. Implementar comando `/recalcular` para reconstruir saldos/deudas desde transacciones.
+
+### Fase siguiente (cuando migres a plan pago)
+
+1. Servicio always-on sin reposo para webhook estable.
+2. Recordatorios automáticos realmente confiables por cron interno.
+3. Múltiples horarios de notificación (ejemplo: 7 días, 3 días y 1 día antes del vencimiento).
+4. Endpoint de healthcheck y monitoreo externo.
+5. Alertas por error operativo (fallos de Sheets, credenciales, webhook).
+6. Futuro panel web básico (resumen, deudas, bitácora) sin dejar Telegram.
+
+### Ideas futuras de producto
+
+1. Presupuestos mensuales por categoría y alertas de sobreconsumo.
+2. Proyección de flujo de caja semanal/mensual.
+3. Soporte multimoneda más robusto con tipo de cambio automático por API.
+4. Exportes (CSV/PDF) para cierre mensual.
+5. Reglas inteligentes de clasificación automática por comercio/nota.
 
 ## Formato de números
 

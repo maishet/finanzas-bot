@@ -220,6 +220,10 @@ def es_cuenta_credito(nombre_cuenta):
     tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta) or "")
     return tipo == "credito"
 
+def es_cuenta_banco(nombre_cuenta):
+    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta) or "")
+    return tipo == "banco"
+
 def detectar_cuenta_en_texto(texto):
     """
     Detecta una cuenta mencionada dentro de un texto, ignorando tildes/mayúsculas.
@@ -584,6 +588,14 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
     logger.info(f"Saldo de '{nombre_cuenta}' actualizado: {saldo_actual} -> {nuevo_saldo}")
     return True
 
+def obtener_saldo_actual_cuenta(nombre_cuenta):
+    cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
+    if not cuenta:
+        return None
+    fila = cuenta["_row"]
+    celda_saldo = cuentas_ws.acell(f"E{fila}", value_render_option="FORMATTED_VALUE").value
+    return parsear_numero(celda_saldo if celda_saldo is not None else cuenta.get("SaldoActual", 0))
+
 # ---------- TRANSACCIONES ----------
 def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuenta="Efectivo", metodo="Efectivo", nota="", fecha=None):
     sincronizar_estado_deudas()
@@ -637,6 +649,97 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     
     actualizar_saldo_cuenta(cuenta_final, tipo, monto_pen)
     return trans_id
+
+def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
+    """
+    Registra un pago de deuda usando una cuenta de tipo Banco.
+    - Aumenta MontoPagado en Deudas
+    - Descuenta saldo de la cuenta banco
+    - Registra una transacción tipo Gasto con DeudaID
+    """
+    sincronizar_estado_deudas()
+
+    deuda = obtener_deuda_por_id(deuda_id)
+    if not deuda:
+        raise ValueError(f"No existe la deuda ID '{deuda_id}'.")
+
+    if not es_cuenta_banco(cuenta_banco):
+        raise ValueError(f"La cuenta '{cuenta_banco}' no es de tipo Banco.")
+
+    row_deuda = deuda["_row"]
+    deuda_id_str = str(deuda.get("ID", "")).strip()
+    descripcion = str(deuda.get("Descripcion", "")).strip() or f"Deuda {deuda_id_str}"
+    moneda_deuda = str(deuda.get("Moneda", "PEN")).upper()
+
+    celda_total = deudas_ws.acell(f"D{row_deuda}", value_render_option="FORMATTED_VALUE").value
+    celda_pagado = deudas_ws.acell(f"F{row_deuda}", value_render_option="FORMATTED_VALUE").value
+    monto_total = parsear_numero(celda_total if celda_total is not None else deuda.get("MontoTotal", 0))
+    monto_pagado = parsear_numero(celda_pagado if celda_pagado is not None else deuda.get("MontoPagado", 0))
+    pendiente = round(monto_total - monto_pagado, 2)
+
+    if pendiente <= 0:
+        raise ValueError(f"La deuda '{deuda_id_str}' no tiene saldo pendiente.")
+
+    monto_pago_origen = parsear_numero(monto)
+    if monto_pago_origen <= 0:
+        raise ValueError("El monto de pago debe ser mayor a 0.")
+
+    pago_en_moneda_deuda = round(convertir_moneda(monto_pago_origen, moneda_pago, moneda_deuda), 2)
+    if pago_en_moneda_deuda > pendiente:
+        raise ValueError(
+            f"El pago excede la deuda pendiente. Pendiente actual: {moneda_deuda} {pendiente:,.2f}"
+        )
+
+    # Verificar saldo disponible en banco (se maneja en PEN en la hoja Cuentas).
+    pago_en_pen = convertir_a_pen(monto_pago_origen, moneda_pago)
+    saldo_banco = obtener_saldo_actual_cuenta(cuenta_banco)
+    if saldo_banco is None:
+        raise ValueError(f"No existe la cuenta '{cuenta_banco}'.")
+    if saldo_banco < pago_en_pen:
+        raise ValueError(
+            f"Saldo insuficiente en {cuenta_banco}. Disponible PEN {saldo_banco:,.2f}, "
+            f"requerido PEN {pago_en_pen:,.2f}."
+        )
+
+    # Actualizar MontoPagado en la deuda.
+    nuevo_pagado = round(monto_pagado + pago_en_moneda_deuda, 2)
+    deudas_ws.update(f"F{row_deuda}", [[nuevo_pagado]], value_input_option="RAW")
+
+    # Registrar transacción del pago de deuda.
+    trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    nota_final = f"Pago deuda {deuda_id_str}: {descripcion}"
+    if nota:
+        nota_final = f"{nota_final}. {nota}"
+
+    fila = [
+        trans_id,
+        fecha,
+        "Gasto",
+        round(float(monto_pago_origen), 2),
+        (moneda_pago or "PEN").upper(),
+        "Deudas",
+        "Pago",
+        cuenta_banco,
+        "Transferencia",
+        nota_final,
+        deuda_id_str,
+    ]
+    trans_ws.append_row(fila, value_input_option="RAW")
+
+    # Descontar saldo del banco.
+    actualizar_saldo_cuenta(cuenta_banco, "gasto", pago_en_pen)
+    sincronizar_estado_deudas()
+
+    pendiente_nuevo = round(monto_total - nuevo_pagado, 2)
+    return {
+        "trans_id": trans_id,
+        "deuda_id": deuda_id_str,
+        "cuenta": cuenta_banco,
+        "pagado": pago_en_moneda_deuda,
+        "moneda_deuda": moneda_deuda,
+        "pendiente": max(0.0, pendiente_nuevo),
+    }
 
 # ---------- CONSULTAS PARA COMANDOS ----------
 def obtener_resumen_cuentas():
