@@ -49,12 +49,29 @@ def parsear_numero(valor):
     if not txt:
         return 0.0
 
-    # Caso típico LATAM: 1.234,56
-    if "," in txt and "." in txt and txt.rfind(",") > txt.rfind("."):
-        txt = txt.replace(".", "").replace(",", ".")
-    # Solo coma: 123,45
-    elif "," in txt and "." not in txt:
-        txt = txt.replace(",", ".")
+    # Mantener solo dígitos y separadores comunes.
+    txt = re.sub(r"[^0-9,.-]", "", txt)
+    if not txt or txt in ["-", ".", ","]:
+        return 0.0
+
+    # Caso con ambos separadores.
+    if "," in txt and "." in txt:
+        if txt.rfind(",") > txt.rfind("."):
+            # Formato latam: 1.234,56
+            txt = txt.replace(".", "").replace(",", ".")
+        else:
+            # Formato en-US: 1,234.56
+            txt = txt.replace(",", "")
+    elif "," in txt:
+        # Solo coma: decimal o miles
+        if re.fullmatch(r"-?\d{1,3}(,\d{3})+", txt):
+            txt = txt.replace(",", "")
+        else:
+            txt = txt.replace(",", ".")
+    elif "." in txt:
+        # Solo punto: decimal o miles (latam formateado)
+        if re.fullmatch(r"-?\d{1,3}(\.\d{3})+", txt):
+            txt = txt.replace(".", "")
 
     try:
         return float(txt)
@@ -911,7 +928,28 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    transacciones = trans_ws.get_all_records()
+    # Usar valores formateados para respetar configuración regional de la hoja.
+    valores = trans_ws.get_all_values()
+    if not valores or len(valores) <= 1:
+        return {
+            "mes": mes,
+            "año": año,
+            "generado_en": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "kpis": {
+                "ingresos": 0.0,
+                "gastos": 0.0,
+                "ahorro": 0.0,
+                "total_transacciones": 0,
+            },
+            "categoria_top": None,
+            "transaccion_mayor": None,
+            "gastos_por_categoria": {},
+            "uso_cuentas": {},
+            "movimientos": [],
+        }
+
+    headers = valores[0]
+    transacciones = [dict(zip(headers, fila)) for fila in valores[1:] if any(str(c).strip() for c in fila)]
     movimientos = []
 
     for t in transacciones:
