@@ -793,23 +793,38 @@ def obtener_balance_mes(mes=None, año=None):
         ahora = datetime.now()
         mes = ahora.month
         año = ahora.year
-    transacciones = trans_ws.get_all_records()
+
+    valores = trans_ws.get_all_values()
+    if not valores or len(valores) <= 1:
+        return {
+            "mes": mes,
+            "año": año,
+            "ingresos": 0.0,
+            "gastos": 0.0,
+            "ahorro": 0.0,
+        }
+
+    headers = valores[0]
+    transacciones = [dict(zip(headers, fila)) for fila in valores[1:] if any(str(c).strip() for c in fila)]
+
     ingresos = 0.0
     gastos = 0.0
     for t in transacciones:
-        fecha_str = t["Fecha"]
-        try:
-            fecha = datetime.strptime(fecha_str.split()[0], "%Y-%m-%d")
-        except:
+        fecha = parsear_fecha(_valor_campo(t, "Fecha", default=""))
+        if not fecha:
             continue
+
         if fecha.year == año and fecha.month == mes:
-            monto = parsear_numero(t.get("Monto", 0))
-            moneda = t["Moneda"]
+            monto = parsear_numero(_valor_campo(t, "Monto", default=0))
+            moneda = str(_valor_campo(t, "Moneda", default="PEN")).upper()
             monto_pen = convertir_a_pen(monto, moneda)
-            if t["Tipo"].lower() == "ingreso":
+
+            tipo = normalizar_texto(_valor_campo(t, "Tipo", default=""))
+            if tipo == "ingreso":
                 ingresos += monto_pen
-            elif t["Tipo"].lower() == "gasto":
+            elif tipo == "gasto":
                 gastos += monto_pen
+
     ahorro = ingresos - gastos
     return {
         "mes": mes,
@@ -827,22 +842,38 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
         ahora = datetime.now()
         mes = ahora.month
         año = ahora.year
-    transacciones = trans_ws.get_all_records()
+
+    valores = trans_ws.get_all_values()
+    if not valores or len(valores) <= 1:
+        return {
+            "categoria": categoria_original,
+            "mes": mes,
+            "año": año,
+            "total": 0.0,
+        }
+
+    headers = valores[0]
+    transacciones = [dict(zip(headers, fila)) for fila in valores[1:] if any(str(c).strip() for c in fila)]
+
     total = 0.0
     for t in transacciones:
-        if t["Tipo"].lower() != "gasto":
+        tipo = normalizar_texto(_valor_campo(t, "Tipo", default=""))
+        if tipo != "gasto":
             continue
-        if t["Categoría"] != categoria_original:
+
+        categoria_registro = str(_valor_campo(t, "Categoría", "Categoria", default="")).strip()
+        if categoria_registro != categoria_original:
             continue
-        fecha_str = t["Fecha"]
-        try:
-            fecha = datetime.strptime(fecha_str.split()[0], "%Y-%m-%d")
-        except:
+
+        fecha = parsear_fecha(_valor_campo(t, "Fecha", default=""))
+        if not fecha:
             continue
+
         if fecha.year == año and fecha.month == mes:
-            monto = parsear_numero(t.get("Monto", 0))
-            moneda = t["Moneda"]
+            monto = parsear_numero(_valor_campo(t, "Monto", default=0))
+            moneda = str(_valor_campo(t, "Moneda", default="PEN")).upper()
             total += convertir_a_pen(monto, moneda)
+
     return {
         "categoria": categoria_original,
         "mes": mes,
