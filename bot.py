@@ -3,6 +3,7 @@ import os
 import tempfile
 from datetime import datetime, time
 from functools import wraps
+import httpx
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 import config
@@ -929,6 +930,22 @@ async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+
+async def enviar_keepalive(context: ContextTypes.DEFAULT_TYPE):
+    """Ping periódico para evitar sleep en Render Free cuando está habilitado."""
+    if not config.KEEPALIVE_ENABLED:
+        return
+    if not config.KEEPALIVE_URL:
+        logger.warning("Keep-alive habilitado pero no hay WEBHOOK_URL/RENDER_EXTERNAL_URL configurado.")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(config.KEEPALIVE_URL)
+        logger.info("Keep-alive ping | url=%s status=%s", config.KEEPALIVE_URL, resp.status_code)
+    except Exception as e:
+        logger.warning("Keep-alive ping falló | url=%s error=%s", config.KEEPALIVE_URL, e)
+
 @restricted
 async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -984,6 +1001,19 @@ def main():
     if app.job_queue is not None:
         app.job_queue.run_daily(enviar_recordatorios_deuda, time=time(hour=9, minute=0))
         app.job_queue.run_once(enviar_recordatorios_deuda, when=10)
+        if config.BOT_MODE == "webhook" and config.KEEPALIVE_ENABLED:
+            interval_seconds = max(60, int(config.KEEPALIVE_INTERVAL_MINUTES) * 60)
+            app.job_queue.run_repeating(
+                enviar_keepalive,
+                interval=interval_seconds,
+                first=30,
+                name="keepalive_ping",
+            )
+            logger.info(
+                "Keep-alive activo | cada %s min | url=%s",
+                config.KEEPALIVE_INTERVAL_MINUTES,
+                config.KEEPALIVE_URL,
+            )
     else:
         logger.warning("JobQueue no disponible; recordatorios automáticos desactivados.")
     

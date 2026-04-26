@@ -529,6 +529,9 @@ Mitigaciones prácticas en free plan:
 - crea un cron-job en cron-job.org para hacer una petición HTTP GET a esa URL cada 10 minutos
 - cuando migres a un plan de pago, cambia `KEEPALIVE_ENABLED=false` y elimina el cron-job
 
+Además del cron externo, el bot ejecuta un ping interno periódico a `WEBHOOK_URL` cuando está en `BOT_MODE=webhook`.
+Verás trazas como `Keep-alive ping | url=... status=...` en logs.
+
 ### Keep-alive opcional con cron-job.org
 
 Si usas Render Free y quieres evitar que el servicio se duerma, puedes automatizar una petición HTTP a la URL raíz del bot.
@@ -554,6 +557,12 @@ KEEPALIVE_ENABLED=false
 ```
 
 7. Elimina o pausa el cron job para no dejar tráfico innecesario.
+
+Diagnóstico rápido en Render:
+
+1. Verifica que aparezca `Keep-alive activo | cada ... min | url=...` al iniciar.
+2. Verifica pings periódicos `Keep-alive ping | url=... status=...`.
+3. Si no aparece, revisa que `BOT_MODE=webhook`, `KEEPALIVE_ENABLED=true` y `WEBHOOK_URL` estén definidos.
 
 ## Roadmap recomendado
 
