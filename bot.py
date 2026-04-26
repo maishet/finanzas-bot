@@ -4,8 +4,11 @@ import tempfile
 from datetime import datetime, time
 from functools import wraps
 import httpx
+import tornado.web
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import _updater as ptb_updater
+from telegram.ext._utils.webhookhandler import TelegramHandler
 import config
 from sheets_handler import (obtener_categorias,
     add_transaction, obtener_nombres_cuentas,
@@ -27,6 +30,32 @@ logger = logging.getLogger(__name__)
 
 VOICE_PENDING_KEY = "voice_pending_payload"
 VOICE_EDITING_KEY = "voice_editing_mode"
+
+
+class HealthHandler(tornado.web.RequestHandler):
+    def get(self):
+        self.set_status(200)
+        self.write("ok")
+
+
+class RenderWebhookApp(tornado.web.Application):
+    """Webhook app con endpoints de salud para plataformas como Render."""
+
+    def __init__(self, webhook_path, bot, update_queue, secret_token=None):
+        shared_objects = {
+            "bot": bot,
+            "update_queue": update_queue,
+            "secret_token": secret_token,
+        }
+        handlers = [
+            (r"/", HealthHandler),
+            (r"/healthz/?", HealthHandler),
+            (rf"{webhook_path}/?", TelegramHandler, shared_objects),
+        ]
+        super().__init__(handlers)
+
+    def log_request(self, handler: tornado.web.RequestHandler) -> None:
+        return
 
 def restricted(func):
     @wraps(func)
@@ -942,7 +971,10 @@ async def enviar_keepalive(context: ContextTypes.DEFAULT_TYPE):
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             resp = await client.get(config.KEEPALIVE_URL)
-        logger.info("Keep-alive ping | url=%s status=%s", config.KEEPALIVE_URL, resp.status_code)
+        if 200 <= resp.status_code < 300:
+            logger.info("Keep-alive ping | url=%s status=%s", config.KEEPALIVE_URL, resp.status_code)
+        else:
+            logger.warning("Keep-alive ping no exitoso | url=%s status=%s", config.KEEPALIVE_URL, resp.status_code)
     except Exception as e:
         logger.warning("Keep-alive ping falló | url=%s error=%s", config.KEEPALIVE_URL, e)
 
@@ -1022,6 +1054,9 @@ def main():
             raise ValueError(
                 "BOT_MODE=webhook requiere WEBHOOK_URL o RENDER_EXTERNAL_URL configurado."
             )
+
+        # Sustituye la app de webhook de PTB para responder 200 en / y /healthz.
+        ptb_updater.WebhookAppClass = RenderWebhookApp
 
         logger.info(
             "Iniciando en modo webhook | port=%s path=%s url=%s",

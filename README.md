@@ -529,7 +529,7 @@ Mitigaciones prácticas en free plan:
 - crea un cron-job en cron-job.org para hacer una petición HTTP GET a esa URL cada 10 minutos
 - cuando migres a un plan de pago, cambia `KEEPALIVE_ENABLED=false` y elimina el cron-job
 
-Además del cron externo, el bot ejecuta un ping interno periódico a `WEBHOOK_URL` cuando está en `BOT_MODE=webhook`.
+Además del cron externo, el bot ejecuta un ping interno periódico a `WEBHOOK_URL/healthz` cuando está en `BOT_MODE=webhook`.
 Verás trazas como `Keep-alive ping | url=... status=...` en logs.
 
 ### Keep-alive opcional con cron-job.org
@@ -548,7 +548,7 @@ KEEPALIVE_INTERVAL_MINUTES=10
 
 2. En cron-job.org, crea un nuevo cron job.
 3. Usa método `GET`.
-4. Apunta la URL a `WEBHOOK_URL` (por ejemplo, `https://tu-app.onrender.com`).
+4. Apunta la URL a `WEBHOOK_URL/healthz` (por ejemplo, `https://tu-app.onrender.com/healthz`).
 5. Programa la ejecución cada 10 minutos.
 6. Si más adelante migras a un plan pago, desactiva la variable:
 

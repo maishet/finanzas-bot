@@ -50,7 +50,10 @@ WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "").strip() or None
 # Keep-alive opcional para Render Free. Cron-job.org puede pegarle a la URL raíz
 # cada N minutos para evitar que el servicio entre en reposo.
 KEEPALIVE_ENABLED = os.getenv("KEEPALIVE_ENABLED", "true").strip().lower() in ["1", "true", "yes", "on"]
-KEEPALIVE_URL = WEBHOOK_BASE_URL.rstrip("/") if WEBHOOK_BASE_URL else None
+if WEBHOOK_BASE_URL:
+    KEEPALIVE_URL = f"{WEBHOOK_BASE_URL.rstrip('/')}/healthz"
+else:
+    KEEPALIVE_URL = None
 KEEPALIVE_INTERVAL_MINUTES = int(os.getenv("KEEPALIVE_INTERVAL_MINUTES", "10"))
 
 if WEBHOOK_BASE_URL:
