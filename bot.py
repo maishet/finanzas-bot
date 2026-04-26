@@ -1,8 +1,10 @@
 import logging
+import os
+import tempfile
 from datetime import datetime, time
 from functools import wraps
-from telegram import Update, InputFile
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 import config
 from sheets_handler import (obtener_categorias,
     add_transaction, obtener_nombres_cuentas,
@@ -13,12 +15,17 @@ from sheets_handler import (obtener_categorias,
     pagar_deuda, obtener_datos_reporte_mensual
 )
 from report_generator import generar_reporte_mensual_pdf
+from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
+from voice_interpreter import interpretar_transcripcion, validar_payload
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+VOICE_PENDING_KEY = "voice_pending_payload"
+VOICE_EDITING_KEY = "voice_editing_mode"
 
 def restricted(func):
     @wraps(func)
@@ -72,12 +79,426 @@ Ejemplo: `/pagar 1 250 BCP pago quincena`
 /categorias - Listado de categorías
 /help o /ayuda - Mostrar este mensaje
 
+🎤 *Notas de voz (es-PE):*
+- Envía una nota de voz con el comando en lenguaje natural.
+- El bot transcribe, interpreta y te pedirá confirmar antes de registrar.
+- Botones: Confirmar / Editar / Cancelar
+
 💡 *Consejos:*
 - Tildes y mayúsculas se ignoran.
 - Para cuentas, escribe el nombre tal cual (BCP, AMEX, Efectivo).
 - Puedes usar "USD": `/gasto 20 USD Comida`
 """
     await update.message.reply_text(mensaje, parse_mode="Markdown")
+
+
+def _resumen_payload(payload):
+    intent = payload.get("intent")
+    periodo = None
+    if payload.get("mes") and payload.get("anio"):
+        try:
+            periodo = f"{int(payload.get('mes')):02d}/{int(payload.get('anio'))}"
+        except Exception:
+            periodo = f"{payload.get('mes')}/{payload.get('anio')}"
+
+    if intent == "pagar":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Pago de deuda\n"
+            f"• Deuda ID: {payload.get('deuda_id', '—')}\n"
+            f"• Monto: {payload.get('moneda', 'PEN')} {payload.get('monto', 0):.2f}\n"
+            f"• Cuenta banco: {payload.get('cuenta', '—')}\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent in {"reporte", "mes"}:
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: {'Reporte mensual' if intent == 'reporte' else 'Balance mensual'}\n"
+            f"• Periodo: {periodo or '—'}\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "resumen":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Resumen de cuentas\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "deudas":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Ver deudas activas\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "recordatorios":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Recordatorios de deudas\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "categorias":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Listar categorías\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "categoria":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Gasto por categoría\n"
+            f"• Categoría: {payload.get('categoria', '—')}\n"
+            f"• Periodo: {periodo or '—'}\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "eliminar":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Eliminar transacción\n"
+            f"• ID: {payload.get('trans_id', '—')}\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    if intent == "editar":
+        return (
+            f"🧠 Interpretación detectada:\n"
+            f"• Acción: Editar transacción\n"
+            f"• ID: {payload.get('trans_id', '—')}\n"
+            f"• Campo: {payload.get('campo', '—')}\n"
+            f"• Valor: {payload.get('valor', '—')}\n"
+            f"\nTexto: {payload.get('raw_text', '')}"
+        )
+
+    accion = "Gasto" if intent == "gasto" else "Ingreso"
+    return (
+        f"🧠 Interpretación detectada:\n"
+        f"• Acción: {accion}\n"
+        f"• Monto: {payload.get('moneda', 'PEN')} {payload.get('monto', 0):.2f}\n"
+        f"• Categoría: {payload.get('categoria', '—')}\n"
+        f"• Cuenta: {payload.get('cuenta', '—')}\n"
+        f"\nTexto: {payload.get('raw_text', '')}"
+    )
+
+
+def _keyboard_confirmacion_voz():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirmar", callback_data="voice:confirm")],
+        [InlineKeyboardButton("✏️ Editar", callback_data="voice:edit")],
+        [InlineKeyboardButton("❌ Cancelar", callback_data="voice:cancel")],
+    ])
+
+
+async def _ejecutar_payload_voz(payload, update: Update):
+    intent = payload.get("intent")
+
+    if intent in {"resumen", "deudas", "recordatorios", "categorias"}:
+        if intent == "resumen":
+            data = obtener_resumen_cuentas()
+            mensaje = "📊 *Resumen de Cuentas*\n\n"
+            for c in data["cuentas"]:
+                mensaje += f"• {c['nombre']} ({c['tipo']}): {c['moneda']} {c['saldo']:,.2f}\n"
+            mensaje += f"\n💰 *Total Activos*: PEN {data['total_activos']:,.2f}\n"
+            mensaje += f"💳 *Total Pasivos (Créditos)*: PEN {data['total_pasivos']:,.2f}\n"
+            mensaje += f"📈 *Patrimonio Neto*: PEN {data['patrimonio']:,.2f}"
+            await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
+            return
+
+        if intent == "deudas":
+            deudas_activas = obtener_deudas_activas()
+            if not deudas_activas:
+                await update.effective_message.reply_text("✅ No tienes deudas activas registradas.")
+                return
+            mensaje = "💳 *Deudas Activas*\n\n"
+            for d in deudas_activas:
+                mensaje += f"• {d['descripcion']}\n"
+                mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
+                mensaje += f"   Vence: {d['vencimiento']}\n"
+                if d['cuenta']:
+                    mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
+                mensaje += "\n"
+            await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
+            return
+
+        if intent == "recordatorios":
+            recordatorios = obtener_recordatorios_deudas(dias_alerta=7)
+            if not recordatorios:
+                await update.effective_message.reply_text("✅ No hay deudas por vencer en los próximos 7 días.")
+                return
+            lineas = ["⏰ *Recordatorios de Deudas (manual)*"]
+            for r in recordatorios:
+                if r["dias_restantes"] < 0:
+                    estado = f"Vencida hace {abs(r['dias_restantes'])} día(s)"
+                elif r["dias_restantes"] == 0:
+                    estado = "Vence hoy"
+                else:
+                    estado = f"Vence en {r['dias_restantes']} día(s)"
+
+                lineas.append(
+                    f"\n• {r['descripcion']} ({r['cuenta']})\n"
+                    f"  Pendiente: {r['moneda']} {r['pendiente']:,.2f}\n"
+                    f"  Vencimiento: {r['vencimiento']} - {estado}"
+                )
+
+            await update.effective_message.reply_text("\n".join(lineas), parse_mode="Markdown")
+            return
+
+        if intent == "categorias":
+            categorias = obtener_categorias()
+            gastos = [c for c in categorias if c["tipo"].lower() == "gasto"]
+            ingresos = [c for c in categorias if c["tipo"].lower() == "ingreso"]
+
+            def formatear_lista(lista_cat):
+                if not lista_cat:
+                    return "• (ninguna)"
+                lineas = []
+                for cat in sorted(lista_cat, key=lambda x: x["original"]):
+                    lineas.append(f"• {cat['original']}")
+                    subs = cat.get("subcategorias", "")
+                    if subs and subs.strip():
+                        for sub in subs.split(";"):
+                            sub = sub.strip()
+                            if sub:
+                                lineas.append(f"  - {sub}")
+                return "\n".join(lineas)
+
+            mensaje = "📂 *CATEGORÍAS DISPONIBLES*\n\n"
+            mensaje += "📤 *Gastos:*\n"
+            mensaje += formatear_lista(gastos)
+            mensaje += "\n\n📥 *Ingresos:*\n"
+            mensaje += formatear_lista(ingresos)
+            await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
+            return
+
+    if intent == "pagar":
+        data = pagar_deuda(
+            deuda_id=str(payload.get("deuda_id")).strip(),
+            monto=float(payload.get("monto")),
+            moneda_pago=payload.get("moneda", "PEN"),
+            cuenta_banco=payload.get("cuenta", ""),
+            nota=payload.get("raw_text", ""),
+        )
+        await update.effective_message.reply_text(
+            f"✅ Pago de deuda registrado\n"
+            f"🆔 Deuda: {data['deuda_id']}\n"
+            f"💸 Pago: {data['moneda_deuda']} {data['pagado']:.2f}\n"
+            f"🏦 Cuenta: {data['cuenta']}\n"
+            f"📉 Pendiente: {data['moneda_deuda']} {data['pendiente']:.2f}\n"
+            f"📅 Vencimiento anterior: {data.get('vencimiento_anterior', '—') or '—'}\n"
+            f"📆 Nuevo vencimiento: {data.get('vencimiento_nuevo', '—')}\n"
+            f"🧾 TX: {data['trans_id']}"
+        )
+        return
+
+    if intent in {"reporte", "mes"}:
+        mes = int(payload.get("mes"))
+        anio = int(payload.get("anio"))
+        if intent == "mes":
+            data = obtener_balance_mes(mes, anio)
+            mensaje = f"📅 *Balance {mes:02d}/{anio}*\n\n"
+            mensaje += f"📥 Ingresos: PEN {data['ingresos']:,.2f}\n"
+            mensaje += f"📤 Gastos: PEN {data['gastos']:,.2f}\n"
+            mensaje += f"💵 Ahorro: PEN {data['ahorro']:,.2f}"
+            await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
+            return
+
+        datos = obtener_datos_reporte_mensual(mes, anio)
+        if datos["kpis"]["total_transacciones"] == 0:
+            await update.effective_message.reply_text(f"ℹ️ No hay transacciones para {mes:02d}/{anio}.")
+            return
+        pdf_buffer = generar_reporte_mensual_pdf(datos)
+        filename = f"reporte_finanzas_{anio}_{mes:02d}.pdf"
+        await update.effective_message.reply_document(
+            document=InputFile(pdf_buffer, filename=filename),
+            caption=f"📄 Cierre mensual {mes:02d}/{anio} generado con gráficos y KPIs.",
+        )
+        return
+
+    if intent == "categoria":
+        categoria = payload.get("categoria")
+        mes = int(payload.get("mes"))
+        anio = int(payload.get("anio"))
+        data = obtener_gasto_por_categoria(categoria, mes, anio)
+        mensaje = f"📊 *Gasto en {data['categoria']}*\n"
+        mensaje += f"📅 {mes:02d}/{anio}: PEN {data['total']:,.2f}"
+        await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
+        return
+
+    if intent == "eliminar":
+        data = eliminar_transaccion(str(payload.get("trans_id")).strip())
+        await update.effective_message.reply_text(
+            f"🗑️ Transacción eliminada\n"
+            f"🆔 {data['id']}\n"
+            f"📌 {data['tipo']} {data['moneda']} {data['monto']:.2f}\n"
+            f"🏦 Cuenta: {data['cuenta']}"
+        )
+        return
+
+    if intent == "editar":
+        data = editar_transaccion(
+            str(payload.get("trans_id")).strip(),
+            str(payload.get("campo")).strip(),
+            str(payload.get("valor")).strip(),
+        )
+        mensaje = (
+            f"✏️ Transacción editada\n"
+            f"🆔 {data['id']}\n"
+            f"🔧 {data['campo']} -> {data['valor']}"
+        )
+        if data.get("deuda_id"):
+            mensaje += f"\n💳 Deuda asociada: {data['deuda_id']}"
+        await update.effective_message.reply_text(mensaje)
+        return
+
+    if intent == "ingreso":
+        trans_id = add_transaction(
+            "Ingreso",
+            float(payload.get("monto")),
+            payload.get("moneda", "PEN"),
+            payload.get("categoria", ""),
+            "",
+            payload.get("cuenta", "Efectivo"),
+            "Transferencia" if payload.get("cuenta", "Efectivo") != "Efectivo" else "Efectivo",
+            payload.get("raw_text", ""),
+        )
+        await update.effective_message.reply_text(f"✅ Ingreso registrado. 🆔 {trans_id}")
+        return
+
+    # gasto por defecto
+    cuenta = payload.get("cuenta", "Efectivo")
+    tipo_cuenta = obtener_tipo_cuenta(cuenta)
+    metodo = metodo_por_tipo_cuenta(tipo_cuenta)
+    trans_id = add_transaction(
+        "Gasto",
+        float(payload.get("monto")),
+        payload.get("moneda", "PEN"),
+        payload.get("categoria", ""),
+        "",
+        cuenta,
+        metodo,
+        payload.get("raw_text", ""),
+    )
+    await update.effective_message.reply_text(f"✅ Gasto registrado. 🆔 {trans_id}")
+
+
+async def _interpretar_y_confirmar(texto, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cuentas = obtener_nombres_cuentas()
+    categorias_gasto = obtener_categorias("Gasto")
+    categorias_ingreso = obtener_categorias("Ingreso")
+
+    payload = interpretar_transcripcion(
+        texto=texto,
+        cuentas=cuentas,
+        categorias_gasto=categorias_gasto,
+        categorias_ingreso=categorias_ingreso,
+    )
+
+    ok, msg = validar_payload(payload)
+    if not ok:
+        await update.effective_message.reply_text(
+            f"⚠️ {msg}\n"
+            f"Envíame una corrección en texto con más detalle."
+        )
+        context.user_data[VOICE_EDITING_KEY] = True
+        return
+
+    context.user_data[VOICE_PENDING_KEY] = payload
+    context.user_data[VOICE_EDITING_KEY] = False
+
+    await update.effective_message.reply_text(
+        _resumen_payload(payload),
+        reply_markup=_keyboard_confirmacion_voz(),
+    )
+
+
+@restricted
+async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not config.VOICE_ENABLED:
+        await update.message.reply_text("⚠️ El módulo de voz está desactivado.")
+        return
+
+    voice = update.message.voice or update.message.audio
+    if not voice:
+        await update.message.reply_text("⚠️ No pude leer el audio enviado.")
+        return
+
+    await update.message.reply_text("🎤 Recibido. Transcribiendo nota de voz...")
+
+    try:
+        tg_file = await context.bot.get_file(voice.file_id)
+        tmp_path = None
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            await tg_file.download_to_drive(custom_path=tmp_path)
+            texto = transcribe_audio_file(tmp_path, language=config.VOICE_LANGUAGE)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    logger.warning(f"No se pudo borrar el temporal de voz: {tmp_path}")
+
+        await _interpretar_y_confirmar(texto, update, context)
+    except VoiceTranscriptionError as e:
+        await update.message.reply_text(f"❌ Error de transcripción: {e}")
+    except Exception as e:
+        logger.error(f"Error procesando nota de voz: {e}")
+        await update.message.reply_text("❌ No pude procesar la nota de voz.")
+
+
+@restricted
+async def procesar_edicion_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get(VOICE_EDITING_KEY):
+        return
+
+    texto = (update.message.text or "").strip()
+    if not texto:
+        await update.message.reply_text("⚠️ Envíame un texto para editar la interpretación.")
+        return
+
+    await _interpretar_y_confirmar(texto, update, context)
+
+
+@restricted
+async def callbacks_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    action = (query.data or "").strip()
+    payload = context.user_data.get(VOICE_PENDING_KEY)
+
+    if action == "voice:cancel":
+        context.user_data.pop(VOICE_PENDING_KEY, None)
+        context.user_data[VOICE_EDITING_KEY] = False
+        await query.edit_message_text("❌ Operación cancelada.")
+        return
+
+    if action == "voice:edit":
+        context.user_data[VOICE_EDITING_KEY] = True
+        await query.edit_message_text("✏️ Envíame el texto corregido para reinterpretarlo.")
+        return
+
+    if action == "voice:confirm":
+        if not payload:
+            await query.edit_message_text("⚠️ No hay una operación pendiente para confirmar.")
+            return
+        try:
+            await _ejecutar_payload_voz(payload, update)
+            await query.edit_message_text("✅ Confirmado y registrado.")
+        except ValueError as e:
+            await query.edit_message_text(f"❌ {e}")
+        except Exception as e:
+            logger.error(f"Error ejecutando payload de voz: {e}")
+            await query.edit_message_text("❌ Error inesperado al ejecutar la operación.")
+        finally:
+            context.user_data.pop(VOICE_PENDING_KEY, None)
+            context.user_data[VOICE_EDITING_KEY] = False
 
 @restricted
 async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -467,6 +888,8 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💸 Pago: {data['moneda_deuda']} {data['pagado']:.2f}\n"
             f"🏦 Cuenta: {data['cuenta']}\n"
             f"📉 Pendiente: {data['moneda_deuda']} {data['pendiente']:.2f}\n"
+            f"📅 Vencimiento anterior: {data.get('vencimiento_anterior', '—') or '—'}\n"
+            f"📆 Nuevo vencimiento: {data.get('vencimiento_nuevo', '—')}\n"
             f"🧾 TX: {data['trans_id']}"
         )
     except ValueError as e:
@@ -554,6 +977,9 @@ def main():
     app.add_handler(CommandHandler("recordatorios", recordatorios_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
+    app.add_handler(CallbackQueryHandler(callbacks_voz, pattern=r"^voice:"))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, procesar_nota_voz))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_edicion_voz))
 
     if app.job_queue is not None:
         app.job_queue.run_daily(enviar_recordatorios_deuda, time=time(hour=9, minute=0))

@@ -26,6 +26,14 @@ BASE_CURRENCY = "PEN"
 # Tipo de cambio USD a PEN (puedes actualizarlo manualmente o más adelante consumir una API)
 EXCHANGE_RATE = float(os.getenv("EXCHANGE_RATE", "3.44"))
 
+# Voz a texto
+VOICE_ENABLED = os.getenv("VOICE_ENABLED", "true").strip().lower() in ["1", "true", "yes", "on"]
+# Mantener es-PE como idioma funcional; motores STT suelen recibir "es".
+VOICE_LOCALE = os.getenv("VOICE_LOCALE", "es-PE")
+VOICE_LANGUAGE = os.getenv("VOICE_LANGUAGE", "es")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_TRANSCRIPTION_MODEL = os.getenv("GROQ_TRANSCRIPTION_MODEL", "whisper-large-v3").strip() or "whisper-large-v3"
+
 # Modo de ejecución: polling (local) o webhook (servidor)
 BOT_MODE = os.getenv("BOT_MODE", "polling").strip().lower()
 
@@ -38,6 +46,12 @@ if not WEBHOOK_PATH.startswith("/"):
 # URL pública del servicio (prioriza WEBHOOK_URL y luego RENDER_EXTERNAL_URL)
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL")
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "").strip() or None
+
+# Keep-alive opcional para Render Free. Cron-job.org puede pegarle a la URL raíz
+# cada N minutos para evitar que el servicio entre en reposo.
+KEEPALIVE_ENABLED = os.getenv("KEEPALIVE_ENABLED", "true").strip().lower() in ["1", "true", "yes", "on"]
+KEEPALIVE_URL = WEBHOOK_BASE_URL.rstrip("/") if WEBHOOK_BASE_URL else None
+KEEPALIVE_INTERVAL_MINUTES = int(os.getenv("KEEPALIVE_INTERVAL_MINUTES", "10"))
 
 if WEBHOOK_BASE_URL:
     WEBHOOK_BASE_URL = WEBHOOK_BASE_URL.rstrip("/")

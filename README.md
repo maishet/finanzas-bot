@@ -41,6 +41,9 @@ y el bot se encargue de:
 - Comando manual de recordatorios para usar cuando el servidor está en sleep.
 - Exporte en PDF del cierre mensual con gráficos y KPIs.
 - Manejo correcto de montos con formato regional, como `1.314,13`.
+- Notas de voz con transcripción y confirmación antes de ejecutar.
+- Interpretación de lenguaje natural para comandos generales: resumen, reporte, mes, deudas, categorías, pago, edición y eliminación.
+- Keep-alive opcional para Render Free mediante cron-job.org.
 
 ## Arquitectura
 
@@ -129,6 +132,13 @@ Carga variables de entorno y centraliza configuración:
 - `GOOGLE_CREDENTIALS_FILE`
 - `BASE_CURRENCY`
 - `EXCHANGE_RATE`
+- `VOICE_ENABLED`
+- `VOICE_LOCALE`
+- `VOICE_LANGUAGE`
+- `GROQ_API_KEY`
+- `GROQ_TRANSCRIPTION_MODEL`
+- `KEEPALIVE_ENABLED`
+- `KEEPALIVE_INTERVAL_MINUTES`
 
 ### `credentials.json`
 
@@ -261,6 +271,39 @@ Las principales librerías usadas son:
 - `python-dotenv` para cargar variables del archivo `.env`.
 - `pytz` y `APScheduler` como soporte de tareas programadas.
 - `oauth2client` por compatibilidad con autenticación en Google APIs.
+- `groq` para transcripción de notas de voz.
+- `reportlab` para generación de PDFs con gráficos y KPIs.
+
+## Estado actual del proyecto
+
+### Ya implementado
+
+- ~~Registro de gastos e ingresos desde Telegram.~~
+- ~~Detección automática de cuenta en el texto del mensaje.~~
+- ~~Soporte para cuentas de tipo `Efectivo`, `Banco`, `Crédito` y `Debito`.~~
+- ~~Actualización automática de saldos en Google Sheets.~~
+- ~~Asociación de gastos a deudas activas mediante `DeudaID`.~~
+- ~~Cálculo de deuda pendiente usando `MontoTotal`, `MontoPagado` y `FechaVencimiento`.~~
+- ~~Comandos para resumen, balance mensual, categorías y deudas activas.~~
+- ~~Edición y eliminación de transacciones ya registradas.~~
+- ~~Registro de pagos de deuda desde cuentas de tipo Banco.~~
+- ~~Recordatorios automáticos de deudas próximas a vencer.~~
+- ~~Comando manual de recordatorios para usar cuando el servidor está en sleep.~~
+- ~~Exporte en PDF del cierre mensual con gráficos y KPIs.~~
+- ~~Manejo correcto de montos con formato regional, como `1.314,13`.~~
+- ~~Notas de voz con transcripción y confirmación antes de ejecutar.~~
+- ~~Interpretación de lenguaje natural para comandos generales: resumen, reporte, mes, deudas, categorías, pago, edición y eliminación.~~
+- ~~Keep-alive opcional para Render Free mediante cron-job.org.~~
+
+### Pendientes recomendados
+
+1. Persistir un historial de comandos de voz fallidos para afinar el parser sin guardar transcripciones completas.
+2. Agregar un comando `/recalcular` para reconstruir saldos y deudas desde transacciones históricas.
+3. Exponer un endpoint de healthcheck dedicado para monitoreo externo.
+4. Añadir alertas por errores operativos críticos en Sheets o webhook.
+5. Mejorar el soporte de conversación guiada para edición de transacciones complejas.
+6. Incorporar gráficos históricos o comparativos por varios meses en el PDF.
+7. Evaluar un panel web liviano de consulta rápida sin salir de Telegram.
 
 ## Comandos del bot
 
@@ -355,6 +398,7 @@ Qué hace internamente:
 - reduce saldo de la cuenta banco
 - crea una transacción tipo `Gasto` asociada al `DeudaID`
 - recalcula estado de deuda (`Activa`, `Pagada`, `Vencida`)
+- avanza `FechaVencimiento` un mes en cada pago registrado (aplica para tarjetas y servicios)
 
 Ejemplo:
 
@@ -429,6 +473,8 @@ El sistema usa:
 - `MontoTotal` como el total consumido/acumulado en la deuda
 - `MontoPagado` como lo ya abonado
 
+Para deudas recurrentes (por ejemplo servicios básicos), al registrar un pago se avanza `FechaVencimiento` en +1 mes automáticamente.
+
 ### Lógica de deuda
 
 ```mermaid
@@ -477,31 +523,66 @@ Mitigaciones prácticas en free plan:
 4. Evitar depender de eventos críticos solo en scheduler gratuito:
 - tratar alertas automáticas como ayuda, no como única fuente.
 
+5. Mantener el servicio despierto con una tarea externa opcional:
+- configura `KEEPALIVE_ENABLED=true`
+- define `WEBHOOK_URL=https://tu-app.onrender.com`
+- crea un cron-job en cron-job.org para hacer una petición HTTP GET a esa URL cada 10 minutos
+- cuando migres a un plan de pago, cambia `KEEPALIVE_ENABLED=false` y elimina el cron-job
+
+### Keep-alive opcional con cron-job.org
+
+Si usas Render Free y quieres evitar que el servicio se duerma, puedes automatizar una petición HTTP a la URL raíz del bot.
+
+Configuración recomendada:
+
+1. En tu `.env` o variables del entorno, define:
+
+```env
+KEEPALIVE_ENABLED=true
+WEBHOOK_URL=https://tu-app.onrender.com
+KEEPALIVE_INTERVAL_MINUTES=10
+```
+
+2. En cron-job.org, crea un nuevo cron job.
+3. Usa método `GET`.
+4. Apunta la URL a `WEBHOOK_URL` (por ejemplo, `https://tu-app.onrender.com`).
+5. Programa la ejecución cada 10 minutos.
+6. Si más adelante migras a un plan pago, desactiva la variable:
+
+```env
+KEEPALIVE_ENABLED=false
+```
+
+7. Elimina o pausa el cron job para no dejar tráfico innecesario.
+
 ## Roadmap recomendado
 
 ### Fase actual (Render Free)
 
-1. Consolidar confiabilidad básica de comandos (`/gasto`, `/ingreso`, `/pagar`, `/deudas`).
-2. Fortalecer comando manual de chequeo de recordatorios (`/recordatorios`) con filtros por días.
+1. ~~Consolidar confiabilidad básica de comandos (`/gasto`, `/ingreso`, `/pagar`, `/deudas`).~~
+2. ~~Fortalecer comando manual de chequeo de recordatorios (`/recordatorios`) con filtros por días.~~
 3. Añadir snapshots diarios en Google Sheets (hoja histórica simple) para auditoría.
 4. Implementar comando `/recalcular` para reconstruir saldos/deudas desde transacciones.
+5. Añadir modo opcional de keep-alive con variable de entorno para Render Free.
+6. Ajustar el parser de voz con frases reales del usuario para reducir ambigüedad.
 
 ### Fase siguiente (cuando migres a plan pago)
 
-1. Servicio always-on sin reposo para webhook estable.
-2. Recordatorios automáticos realmente confiables por cron interno.
+1. ~~Servicio always-on sin reposo para webhook estable.~~
+2. ~~Recordatorios automáticos realmente confiables por cron interno.~~
 3. Múltiples horarios de notificación (ejemplo: 7 días, 3 días y 1 día antes del vencimiento).
 4. Endpoint de healthcheck y monitoreo externo.
 5. Alertas por error operativo (fallos de Sheets, credenciales, webhook).
 6. Futuro panel web básico (resumen, deudas, bitácora) sin dejar Telegram.
+7. Desactivar keep-alive externo cuando ya no sea necesario.
 
 ### Ideas futuras de producto
 
-1. Presupuestos mensuales por categoría y alertas de sobreconsumo.
-2. Proyección de flujo de caja semanal/mensual.
-3. Soporte multimoneda más robusto con tipo de cambio automático por API.
-4. Exportes (CSV/PDF) para cierre mensual.
-5. Reglas inteligentes de clasificación automática por comercio/nota.
+1. Soporte multimoneda más robusto con tipo de cambio automático por API.
+2. Usar notas de voz que se transcriban a texto y que se interpreten a comandos.
+3. Respuestas proactivas con resúmenes semanales y mensuales por Telegram.
+4. Exportación de reportes comparativos entre varios meses.
+5. Panel web de solo lectura para consultar estados desde el móvil.
 
 ## Formato de números
 

@@ -1,6 +1,7 @@
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import calendar
 import unicodedata
 import re
 import config
@@ -101,6 +102,23 @@ def parsear_fecha(valor):
         except ValueError:
             continue
     return None
+
+
+def avanzar_un_mes(fecha_base):
+    """Avanza una fecha un mes, conservando día cuando sea posible."""
+    if fecha_base is None:
+        fecha_base = datetime.now()
+
+    if fecha_base.month == 12:
+        nuevo_mes = 1
+        nuevo_anio = fecha_base.year + 1
+    else:
+        nuevo_mes = fecha_base.month + 1
+        nuevo_anio = fecha_base.year
+
+    ultimo_dia = calendar.monthrange(nuevo_anio, nuevo_mes)[1]
+    nuevo_dia = min(fecha_base.day, ultimo_dia)
+    return fecha_base.replace(year=nuevo_anio, month=nuevo_mes, day=nuevo_dia)
 
 def convertir_moneda(monto, moneda_origen, moneda_destino):
     """Convierte entre PEN y USD usando EXCHANGE_RATE."""
@@ -687,6 +705,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     deuda_id_str = str(deuda.get("ID", "")).strip()
     descripcion = str(deuda.get("Descripcion", "")).strip() or f"Deuda {deuda_id_str}"
     moneda_deuda = str(deuda.get("Moneda", "PEN")).upper()
+    fecha_venc_actual = parsear_fecha(deuda.get("FechaVencimiento"))
 
     celda_total = deudas_ws.acell(f"D{row_deuda}", value_render_option="FORMATTED_VALUE").value
     celda_pagado = deudas_ws.acell(f"F{row_deuda}", value_render_option="FORMATTED_VALUE").value
@@ -722,6 +741,10 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     nuevo_pagado = round(monto_pagado + pago_en_moneda_deuda, 2)
     deudas_ws.update(f"F{row_deuda}", [[nuevo_pagado]], value_input_option="RAW")
 
+    # Avanzar vencimiento un mes en cada pago registrado.
+    fecha_venc_nueva = avanzar_un_mes(fecha_venc_actual)
+    deudas_ws.update(f"G{row_deuda}", [[fecha_venc_nueva.strftime("%d/%m/%Y")]], value_input_option="RAW")
+
     # Registrar transacción del pago de deuda.
     trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -756,6 +779,8 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
         "pagado": pago_en_moneda_deuda,
         "moneda_deuda": moneda_deuda,
         "pendiente": max(0.0, pendiente_nuevo),
+        "vencimiento_anterior": fecha_venc_actual.strftime("%d/%m/%Y") if fecha_venc_actual else "",
+        "vencimiento_nuevo": fecha_venc_nueva.strftime("%d/%m/%Y"),
     }
 
 # ---------- CONSULTAS PARA COMANDOS ----------
