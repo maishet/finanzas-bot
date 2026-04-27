@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 VOICE_PENDING_KEY = "voice_pending_payload"
 VOICE_EDITING_KEY = "voice_editing_mode"
+VENTANAS_RECORDATORIO_DIAS = (7, 3, 1)
 
 
 class HealthHandler(tornado.web.RequestHandler):
@@ -928,9 +929,22 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error pagando deuda: {e}")
         await update.message.reply_text("❌ Error inesperado al registrar el pago de deuda.")
 
+def _texto_estado_deuda(dias_restantes: int) -> str:
+    if dias_restantes < 0:
+        return f"Vencida hace {abs(dias_restantes)} día(s)"
+    if dias_restantes == 0:
+        return "Vence hoy"
+    return f"Vence en {dias_restantes} día(s)"
+
+
 async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
+    """Recordatorio automático por ventana exacta: 7d, 3d o 1d (y hoy para 1d)."""
+    ventana = 3
+    if getattr(context, "job", None) and isinstance(context.job.data, int):
+        ventana = context.job.data
+
     try:
-        recordatorios = obtener_recordatorios_deudas(dias_alerta=3)
+        recordatorios = obtener_recordatorios_deudas(dias_alerta=max(7, ventana))
     except Exception as e:
         logger.error(f"Error generando recordatorios de deuda: {e}")
         return
@@ -938,14 +952,22 @@ async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
     if not recordatorios:
         return
 
-    lineas = ["⏰ *Recordatorios de Deudas*"]
-    for r in recordatorios:
-        if r["dias_restantes"] < 0:
-            estado = f"Vencida hace {abs(r['dias_restantes'])} día(s)"
-        elif r["dias_restantes"] == 0:
-            estado = "Vence hoy"
-        else:
-            estado = f"Vence en {r['dias_restantes']} día(s)"
+    objetivos = {ventana}
+    # Para ventana 1 día también avisamos el día de vencimiento.
+    if ventana == 1:
+        objetivos.add(0)
+
+    filtrados = [r for r in recordatorios if r.get("dias_restantes") in objetivos]
+    if not filtrados:
+        return
+
+    titulo = f"⏰ *Recordatorios de Deudas ({ventana} día(s) antes)*"
+    if ventana == 1:
+        titulo = "⏰ *Recordatorios de Deudas (1 día antes / hoy)*"
+
+    lineas = [titulo]
+    for r in filtrados:
+        estado = _texto_estado_deuda(r["dias_restantes"])
 
         lineas.append(
             f"\n• {r['descripcion']} ({r['cuenta']})\n"
@@ -1031,8 +1053,16 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_edicion_voz))
 
     if app.job_queue is not None:
-        app.job_queue.run_daily(enviar_recordatorios_deuda, time=time(hour=9, minute=0))
-        app.job_queue.run_once(enviar_recordatorios_deuda, when=10)
+        for dias in VENTANAS_RECORDATORIO_DIAS:
+            app.job_queue.run_daily(
+                enviar_recordatorios_deuda,
+                time=time(hour=12, minute=0),
+                data=dias,
+                name=f"recordatorio_{dias}d",
+            )
+
+        # En arranque, dispara una pasada rápida para la ventana de 3 días.
+        app.job_queue.run_once(enviar_recordatorios_deuda, when=10, data=3, name="recordatorio_inicio_3d")
         if config.BOT_MODE == "webhook" and config.KEEPALIVE_ENABLED:
             interval_seconds = max(60, int(config.KEEPALIVE_INTERVAL_MINUTES) * 60)
             app.job_queue.run_repeating(

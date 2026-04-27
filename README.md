@@ -493,7 +493,7 @@ El bot puede enviar recordatorios automáticos de deudas próximas a vencer.
 Comportamiento actual:
 
 - se ejecuta al iniciar el bot
-- se ejecuta diariamente a las 09:00
+- se ejecuta diariamente a las 12:00 en tres ventanas: 7, 3 y 1 día antes del vencimiento
 - detecta deudas activas y vencidas próximas
 - alerta por consola y por Telegram al usuario autorizado
 
@@ -579,7 +579,7 @@ Diagnóstico rápido en Render:
 
 1. ~~Servicio always-on sin reposo para webhook estable.~~
 2. ~~Recordatorios automáticos realmente confiables por cron interno.~~
-3. Múltiples horarios de notificación (ejemplo: 7 días, 3 días y 1 día antes del vencimiento).
+3. ~~Múltiples horarios de notificación (ejemplo: 7 días, 3 días y 1 día antes del vencimiento).~~
 4. Endpoint de healthcheck y monitoreo externo.
 5. Alertas por error operativo (fallos de Sheets, credenciales, webhook).
 6. Futuro panel web básico (resumen, deudas, bitácora) sin dejar Telegram.
