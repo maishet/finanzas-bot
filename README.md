@@ -1,6 +1,6 @@
 # Finanzas Bot
 
-Bot de Telegram para registrar gastos e ingresos, sincronizar movimientos con Google Sheets, controlar deudas de tarjetas de crédito y recibir recordatorios automáticos de vencimiento.
+Bot de Telegram para registrar gastos e ingresos, sincronizar movimientos con Google Sheets, controlar deudas de tarjetas de crédito, recibir recordatorios automáticos de vencimiento y detectar correos bancarios con Gmail Push.
 
 ## Resumen
 
@@ -38,12 +38,33 @@ y el bot se encargue de:
 - Edición y eliminación de transacciones ya registradas.
 - Registro de pagos de deuda desde cuentas de tipo Banco.
 - Recordatorios automáticos de deudas próximas a vencer.
-- Comando manual de recordatorios para usar cuando el servidor está en sleep.
+- Bandeja de movimientos pendientes para conciliación rápida.
+- Conciliación por cuenta con sugerencias de transacciones faltantes.
+- Gmail Push con Pub/Sub para detección casi instantánea de correos bancarios.
+- Parser de correos para inferir tipo, monto, moneda y cuenta usando `NumeroCuenta`.
+- Deduplicación por Message-ID/historial para evitar registros repetidos.
+- Logs explícitos de descarte para Gmail Push, con prefijo `GMAIL_PUSH_DROP`.
+- Estado de Gmail Push visible desde Telegram con `historyId`, `last_push_at` y modo de ejecución.
+- Snapshot diario de saldos para auditoría (`SaldosHistoricos`).
 - Exporte en PDF del cierre mensual con gráficos y KPIs.
 - Manejo correcto de montos con formato regional, como `1.314,13`.
 - Notas de voz con transcripción y confirmación antes de ejecutar.
 - Interpretación de lenguaje natural para comandos generales: resumen, reporte, mes, deudas, categorías, pago, edición y eliminación.
 - Keep-alive opcional para Render Free mediante cron-job.org.
+
+## Mejoras recientes
+
+Las últimas mejoras ya integradas en la aplicación son:
+
+- `/deudas` ahora muestra el ID de cada deuda activa.
+- Los recordatorios automáticos también muestran el ID de la deuda.
+- Se eliminó el comando `/recordatorios` para evitar duplicidad con `/deudas`.
+- Se eliminó por completo `/recalcular` de la interfaz y del código.
+- El flujo de deuda pasó a trabajar por ciclos: al pagarse una deuda recurrente se crea una nueva instancia para el siguiente vencimiento.
+- `/conciliar` se restauró como comando de auditoría para comparar saldo real contra saldo en hoja y sugerir pendientes.
+- Gmail Push ahora deja logs claros cuando descarta correos por remitente, tipo, monto, cuenta, duplicado o notificación vieja.
+- `GMAIL_ALLOWED_SENDERS` se usa como filtro explícito y el estado del bot muestra si está en `polling` o `webhook`.
+- El bot avisa cuando Gmail Push está habilitado pero corre en `polling`, porque en ese modo no existe el endpoint `/gmail/push`.
 
 ## Arquitectura
 
@@ -92,6 +113,7 @@ finanzas-bot/
 ├── bot.py
 ├── config.py
 ├── credentials.json
+├── gmail_push.py
 ├── README.md
 ├── requirements.txt
 └── sheets_handler.py
@@ -121,6 +143,17 @@ Contiene toda la lógica de negocio y acceso a Google Sheets:
 - edición y eliminación de transacciones
 - generación de resúmenes y reportes
 - consulta de recordatorios de deudas
+
+### `gmail_push.py`
+
+Contiene la integración de Gmail Push:
+
+- autenticación OAuth de Gmail
+- watch de Gmail API
+- consumo de notificaciones Pub/Sub
+- lectura del historial de Gmail
+- parseo de mensajes RFC822
+- registro de pendientes en Google Sheets
 
 ### `config.py`
 
@@ -288,7 +321,9 @@ Las principales librerías usadas son:
 - ~~Edición y eliminación de transacciones ya registradas.~~
 - ~~Registro de pagos de deuda desde cuentas de tipo Banco.~~
 - ~~Recordatorios automáticos de deudas próximas a vencer.~~
-- ~~Comando manual de recordatorios para usar cuando el servidor está en sleep.~~
+- ~~Bandeja de movimientos pendientes y conciliación por cuenta.~~
+- ~~Gmail Push con Pub/Sub, parser y deduplicación.~~
+- ~~Snapshots de saldos para auditoría.~~
 - ~~Exporte en PDF del cierre mensual con gráficos y KPIs.~~
 - ~~Manejo correcto de montos con formato regional, como `1.314,13`.~~
 - ~~Notas de voz con transcripción y confirmación antes de ejecutar.~~
@@ -298,12 +333,11 @@ Las principales librerías usadas son:
 ### Pendientes recomendados
 
 1. Persistir un historial de comandos de voz fallidos para afinar el parser sin guardar transcripciones completas.
-2. Agregar un comando `/recalcular` para reconstruir saldos y deudas desde transacciones históricas.
-3. Exponer un endpoint de healthcheck dedicado para monitoreo externo.
-4. Añadir alertas por errores operativos críticos en Sheets o webhook.
-5. Mejorar el soporte de conversación guiada para edición de transacciones complejas.
-6. Incorporar gráficos históricos o comparativos por varios meses en el PDF.
-7. Evaluar un panel web liviano de consulta rápida sin salir de Telegram.
+2. Mejorar el soporte de conversación guiada para edición de transacciones complejas.
+3. Incorporar gráficos históricos o comparativos por varios meses en el PDF.
+4. Evaluar un panel web liviano de consulta rápida sin salir de Telegram.
+5. Añadir alertas por errores operativos críticos en Sheets o webhook.
+6. Reforzar métricas operativas de Gmail Push para distinguir mejor descartes, duplicados y registros nuevos.
 
 ## Comandos del bot
 
@@ -378,14 +412,84 @@ Muestra el gasto acumulado de una categoría en el mes actual.
 
 Lista las deudas activas con su pendiente, vencimiento y cuenta asociada.
 
-#### `/recordatorios`
+#### `/pendiente <tipo> <monto> <cuenta> <descripcion>`
 
-Muestra alertas manuales de deudas por vencer (ventana de 7 días).
+Registra un movimiento detectado pero aún no confirmado en la bandeja de pendientes.
 
 Ejemplo:
 
 ```text
-/recordatorios
+/pendiente ingreso 1500 BCP transferencia cliente ABC
+```
+
+#### `/pendientes [N]`
+
+Lista los pendientes más recientes para revisión rápida.
+
+Ejemplo:
+
+```text
+/pendientes 10
+```
+
+#### `/confirmar_pendiente <ID> <categoria> [nota]`
+
+Convierte un pendiente en transacción real y lo marca como confirmado.
+
+Ejemplo:
+
+```text
+/confirmar_pendiente MP00001 Sueldo confirmado por correo
+```
+
+#### `/descartar_pendiente <ID> [motivo]`
+
+Marca un pendiente como descartado sin registrar transacción.
+
+Ejemplo:
+
+```text
+/descartar_pendiente MP00003 duplicado
+```
+
+#### `/conciliar <cuenta> <saldo_real> [moneda]`
+
+Compara el saldo real de una cuenta contra el saldo en hoja y propone pendientes cercanos a la diferencia.
+
+Ejemplo:
+
+```text
+/conciliar BCP 3580.40 PEN
+```
+
+#### `/gmail_watch`
+
+Crea o renueva el watch de Gmail Push para que el buzón quede conectado al bot.
+
+Ejemplo:
+
+```text
+/gmail_watch
+```
+
+#### `/gmail_estado`
+
+Muestra el estado actual del watch y el último `historyId` persistido.
+
+Ejemplo:
+
+```text
+/gmail_estado
+```
+
+#### `/snapshot`
+
+Guarda un snapshot manual de saldos por cuenta en la hoja `SaldosHistoricos`.
+
+Ejemplo:
+
+```text
+/snapshot
 ```
 
 #### `/pagar <deuda_id> <monto> <cuenta_banco> [nota]`
@@ -512,10 +616,11 @@ Mitigaciones prácticas en free plan:
 1. Priorizar comandos manuales para validar estado:
 - `/deudas`
 - `/resumen`
-- `/recordatorios`
+- `/snapshot`
+- `/conciliar`
 
 2. Usar recordatorio manual como respaldo operativo:
-- Revisar deudas al menos una vez al día con `/deudas` o `/recordatorios`.
+- Revisar deudas al menos una vez al día con `/deudas`.
 
 3. Mantener tiempos de espera realistas:
 - tras inactividad, el primer request puede tardar en despertar el servicio.
@@ -564,16 +669,162 @@ Diagnóstico rápido en Render:
 2. Verifica pings periódicos `Keep-alive ping | url=... status=...`.
 3. Si no aparece, revisa que `BOT_MODE=webhook`, `KEEPALIVE_ENABLED=true` y `WEBHOOK_URL` estén definidos.
 
+## Fase 1 de automatización (implementada)
+
+Objetivo: reducir descuadres por movimientos no registrados (por ejemplo transferencias recibidas y no ingresadas en el momento).
+
+Componentes implementados:
+
+1. Hoja `MovimientosPendientes` (autocreada si no existe).
+2. Registro manual rápido de pendientes desde Telegram (`/pendiente`).
+3. Flujo de revisión (`/pendientes`, `/confirmar_pendiente`, `/descartar_pendiente`).
+4. Conciliación por cuenta con sugerencias (`/conciliar`).
+
+Estructura de `MovimientosPendientes`:
+
+- `ID`
+- `FechaDetectada`
+- `Fuente`
+- `Cuenta`
+- `Tipo`
+- `Monto`
+- `Moneda`
+- `Descripcion`
+- `Referencia`
+- `Estado` (`Pendiente`, `Confirmado`, `Descartado`)
+- `Confianza`
+- `TXID`
+- `FechaResolucion`
+- `Observacion`
+
+## Fase 2 de automatización (implementada)
+
+Objetivo: detectar movimientos desde correo bancario usando Gmail Push + Pub/Sub y llevarlos a una bandeja de revisión con deduplicación.
+
+Componentes implementados:
+
+1. Watch de Gmail API para tu buzón.
+2. Publicación de eventos vía Pub/Sub hacia el endpoint `/gmail/push`.
+3. Parser de asunto/cuerpo/adjuntos RFC822 para inferir `tipo`, `monto`, `moneda` y `cuenta`.
+4. Match de cuenta usando la columna `NumeroCuenta` de la hoja `Cuentas`.
+5. Registro automático en `MovimientosPendientes` usando `Fuente=GmailPush`.
+6. Deduplicación por `Referencia` y por similitud (cuenta/tipo/monto).
+7. Comando manual `/gmail_watch` y comando `/gmail_estado`.
+
+Variables principales de entorno:
+
+- `GMAIL_PUSH_ENABLED`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
+- `GMAIL_USER_EMAIL`
+- `GMAIL_PUSH_TOPIC_NAME`
+- `GMAIL_PUSH_VERIFY_TOKEN`
+- `GMAIL_WATCH_LABEL_IDS`
+- `GMAIL_WATCH_RENEW_BUFFER_HOURS`
+- `GMAIL_ALLOWED_SENDERS` (lista separada por comas)
+
+Matching de cuenta por correo:
+
+- En la hoja `Cuentas`, usa únicamente la columna `NumeroCuenta`.
+- Guarda el número completo de la tarjeta o cuenta, por ejemplo `19171439582091`.
+- Si el correo trae solo `*** 2091`, el bot hace match por últimos 4 dígitos.
+- Si el correo menciona una cuenta que no está en `Cuentas`, se omite.
+
+### Configuración de Gmail Push en Google Cloud
+
+Este proyecto usa el mismo proyecto de Google Cloud que ya tienes para Sheets, pero Gmail Push requiere además credenciales OAuth de Gmail y Pub/Sub.
+
+1. Entra a Google Cloud Console y selecciona el mismo proyecto del bot.
+2. Habilita estas APIs:
+	- Gmail API
+	- Cloud Pub/Sub API
+3. Crea la pantalla de consentimiento OAuth si todavía no existe.
+4. Crea un OAuth Client ID para aplicación de escritorio o web.
+5. Obtén un refresh token para el buzón que quieres monitorear y guárdalo en `GMAIL_REFRESH_TOKEN`.
+6. Crea un topic de Pub/Sub, por ejemplo `gmail-notifications`.
+7. Da permiso de `Publisher` al servicio `gmail-api-push@system.gserviceaccount.com` sobre ese topic.
+8. Crea una suscripción push que apunte a `https://tu-servicio.onrender.com/gmail/push?token=TU_TOKEN_SECRETO`.
+9. Carga en `.env` los valores de `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_PUSH_TOPIC_NAME` y `GMAIL_PUSH_VERIFY_TOKEN`.
+10. Ejecuta `/gmail_watch` una sola vez para registrar el watch inicial.
+
+### Cómo crear la suscripción push paso a paso
+
+1. En Google Cloud Console ve a Pub/Sub > Topics y abre tu topic `gmail-notifications`.
+2. Haz clic en Create subscription.
+3. Asigna un nombre, por ejemplo `gmail-notifications-push`.
+4. En Delivery type elige Push.
+5. En Push endpoint coloca la URL pública de tu bot con el endpoint Gmail Push, por ejemplo:
+
+```text
+https://tu-servicio.onrender.com/gmail/push?token=TU_TOKEN_SECRETO
+```
+
+6. En Authentication deja el envío sin auth adicional si estás usando el token de verificación por query string.
+7. Crea la suscripción.
+8. Confirma que el topic tenga permiso de publicación para `gmail-api-push@system.gserviceaccount.com`.
+9. Verifica que el bot exponga el endpoint `/gmail/push` en tu servidor público.
+10. Ejecuta `/gmail_watch` para que Gmail registre el watch y empiece a emitir eventos.
+
+### Qué hace cada pieza
+
+- Gmail API detecta el correo nuevo.
+- Pub/Sub entrega la notificación al endpoint `/gmail/push`.
+- El bot usa `historyId` para consultar el mensaje real en Gmail.
+- El parser lee remitente, asunto y cuerpo.
+- Si el remitente coincide con `GMAIL_ALLOWED_SENDERS` y la cuenta aparece en `NumeroCuenta`, se registra el movimiento en `MovimientosPendientes`.
+- Si el mismo mensaje vuelve a llegar, la deduplicación evita el doble registro.
+
+### Siguiente paso después de obtener `GMAIL_REFRESH_TOKEN`
+
+1. Pega el refresh token en tu archivo `.env`.
+2. Verifica que `GMAIL_PUSH_ENABLED=true`.
+3. Verifica que `GMAIL_USER_EMAIL` sea el buzón que vas a monitorear.
+4. Verifica que `GMAIL_ALLOWED_SENDERS` contenga el remitente bancario permitido, por ejemplo `notificaciones@notificacionesbcp.com.pe`.
+5. Verifica que `NumeroCuenta` en la hoja `Cuentas` tenga el número completo de la cuenta o tarjeta que quieres administrar.
+6. Inicia el bot.
+7. Ejecuta `/gmail_watch` para registrar o renovar el watch.
+8. Revisa `/gmail_estado` para confirmar que quedó guardado el `historyId`.
+
+### Estado actual del proyecto
+
+1. Fase 1 lista: bandeja de pendientes y conciliación manual por Telegram.
+2. Fase 2 lista: Gmail Push + Pub/Sub + parser + deduplicación.
+3. Fase 3 lista: snapshots históricos y auditoría operativa.
+4. El flujo IMAP fue eliminado; ya no existe el comando `/correo_scan`.
+
+Si el watch falla, revisa en Google Cloud:
+
+1. Que tu usuario esté agregado como tester en la pantalla OAuth.
+2. Que Gmail API y Cloud Pub/Sub estén habilitadas.
+3. Que el topic de Pub/Sub exista y el servicio `gmail-api-push@system.gserviceaccount.com` tenga permiso de Publisher.
+4. Que la suscripción push apunte al endpoint `/gmail/push` con el token secreto correcto.
+
+Cómo fluye el sistema:
+
+1. Gmail detecta un correo nuevo.
+2. Gmail publica un evento en Pub/Sub.
+3. Pub/Sub hace POST al endpoint `/gmail/push`.
+4. El bot consulta el historial Gmail desde el último `historyId` guardado.
+5. El parser identifica el movimiento, hace match con `NumeroCuenta` y lo registra como pendiente.
+6. Si el mensaje llega otra vez, la deduplicación evita el doble registro.
+
+### Reglas de operación para BCP
+
+1. El correo permitido puede ser solo `notificaciones@notificacionesbcp.com.pe`.
+2. En `Cuentas`, la columna `NumeroCuenta` debe contener el número completo de la cuenta BCP, por ejemplo `123456789`.
+3. Si el correo muestra solo `*** 2091`, el bot hará match por los últimos 4 dígitos.
+4. Si el correo llega de otra cuenta o un número no registrado en `Cuentas`, se ignora.
+
 ## Roadmap recomendado
 
 ### Fase actual (Render Free)
 
 1. ~~Consolidar confiabilidad básica de comandos (`/gasto`, `/ingreso`, `/pagar`, `/deudas`).~~
-2. ~~Fortalecer comando manual de chequeo de recordatorios (`/recordatorios`) con filtros por días.~~
-3. Añadir snapshots diarios en Google Sheets (hoja histórica simple) para auditoría.
-4. Implementar comando `/recalcular` para reconstruir saldos/deudas desde transacciones.
-5. Añadir modo opcional de keep-alive con variable de entorno para Render Free.
-6. Ajustar el parser de voz con frases reales del usuario para reducir ambigüedad.
+2. ~~Fase 2: Gmail Push + parser + deduplicación.~~
+3. ~~Añadir snapshots diarios en Google Sheets (hoja histórica simple) para auditoría.~~
+4. ~~Añadir modo opcional de keep-alive con variable de entorno para Render Free.~~
+5. ~~Ajustar el parser de voz con frases reales del usuario para reducir ambigüedad.~~
 
 ### Fase siguiente (cuando migres a plan pago)
 
@@ -603,6 +854,8 @@ El proyecto ya está preparado para manejar formatos regionales como:
 - `123.53`
 
 Esto evita errores al leer montos y saldos desde Google Sheets, especialmente si la hoja está configurada con formato latinoamericano.
+
+También aplica a comandos de Fase 1 y Fase 2 (`/pendiente`, `/pendientes`, `/conciliar`, `/gmail_watch`, `/gmail_estado`, `/snapshot`), unificando el parseo para entradas como `314,13` y `314.13`.
 
 ## Ejemplo de uso completo
 

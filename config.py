@@ -4,6 +4,13 @@ from dotenv import load_dotenv
 # Cargar variables desde .env si existe
 load_dotenv()
 
+
+def _parse_csv_env(name):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
 # Token del bot de Telegram
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
@@ -55,6 +62,23 @@ if WEBHOOK_BASE_URL:
 else:
     KEEPALIVE_URL = None
 KEEPALIVE_INTERVAL_MINUTES = int(os.getenv("KEEPALIVE_INTERVAL_MINUTES", "10"))
+
+# Gmail Push (Gmail API + Pub/Sub)
+GMAIL_PUSH_ENABLED = os.getenv("GMAIL_PUSH_ENABLED", "false").strip().lower() in ["1", "true", "yes", "on"]
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "").strip()
+GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
+GMAIL_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
+GMAIL_USER_EMAIL = os.getenv("GMAIL_USER_EMAIL", "").strip()
+GMAIL_PUSH_TOPIC_NAME = os.getenv("GMAIL_PUSH_TOPIC_NAME", "").strip()
+GMAIL_PUSH_VERIFY_TOKEN = os.getenv("GMAIL_PUSH_VERIFY_TOKEN", "").strip() or None
+GMAIL_WATCH_LABEL_IDS = _parse_csv_env("GMAIL_WATCH_LABEL_IDS") or ["INBOX"]
+GMAIL_WATCH_RENEW_BUFFER_HOURS = int(os.getenv("GMAIL_WATCH_RENEW_BUFFER_HOURS", "24"))
+GMAIL_ALLOWED_SENDERS = [x.lower() for x in _parse_csv_env("GMAIL_ALLOWED_SENDERS")]
+
+if GMAIL_PUSH_ENABLED and (not GMAIL_CLIENT_ID or not GMAIL_CLIENT_SECRET or not GMAIL_REFRESH_TOKEN or not GMAIL_PUSH_TOPIC_NAME):
+    raise ValueError(
+        "GMAIL_PUSH_ENABLED=true requiere GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN y GMAIL_PUSH_TOPIC_NAME."
+    )
 
 if WEBHOOK_BASE_URL:
     WEBHOOK_BASE_URL = WEBHOOK_BASE_URL.rstrip("/")

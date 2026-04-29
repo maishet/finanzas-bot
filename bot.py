@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import tempfile
 from datetime import datetime, time
@@ -10,13 +11,25 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.ext import _updater as ptb_updater
 from telegram.ext._utils.webhookhandler import TelegramHandler
 import config
+from gmail_push import (
+    iniciar_watch_gmail,
+    renovar_watch_si_necesario,
+    procesar_notificacion_gmail_push,
+    obtener_estado_gmail_push_resumido,
+    GmailPushError,
+)
 from sheets_handler import (obtener_categorias,
     add_transaction, obtener_nombres_cuentas,
     obtener_resumen_cuentas, obtener_balance_mes,
     obtener_gasto_por_categoria, obtener_deudas_activas,
     detectar_cuenta_en_texto, obtener_tipo_cuenta,
     eliminar_transaccion, editar_transaccion, obtener_recordatorios_deudas,
-    pagar_deuda, obtener_datos_reporte_mensual
+    pagar_deuda, obtener_datos_reporte_mensual,
+    parsear_numero,
+    generar_snapshot_saldos,
+    registrar_movimiento_pendiente, listar_movimientos_pendientes,
+    confirmar_movimiento_pendiente, descartar_movimiento_pendiente,
+    conciliar_cuenta
 )
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
@@ -39,6 +52,62 @@ class HealthHandler(tornado.web.RequestHandler):
         self.write("ok")
 
 
+class GmailPushHandler(tornado.web.RequestHandler):
+    def initialize(self, bot=None, **kwargs):
+        self.bot = bot
+
+    def get(self):
+        self.set_status(405)
+        self.write("method not allowed")
+
+    async def post(self):
+        if config.GMAIL_PUSH_VERIFY_TOKEN:
+            token = self.get_query_argument("token", default="")
+            if token != config.GMAIL_PUSH_VERIFY_TOKEN:
+                self.set_status(403)
+                self.write("forbidden")
+                return
+
+        try:
+            payload = json.loads(self.request.body.decode("utf-8") or "{}")
+        except Exception:
+            self.set_status(400)
+            self.write("invalid json")
+            return
+
+        try:
+            stats = await procesar_notificacion_gmail_push(payload)
+        except GmailPushError as e:
+            logger.warning(f"Gmail Push error: {e}")
+            self.set_status(200)
+            self.write({"ok": False, "error": str(e)})
+            return
+        except Exception as e:
+            logger.error(f"Error inesperado en Gmail Push: {e}")
+            self.set_status(500)
+            self.write("internal error")
+            return
+
+        if self.bot and stats.get("registrados", 0) > 0:
+            try:
+                nuevos = stats.get("nuevos_ids", [])
+                mensaje = (
+                    "📬 Gmail Push detectó nuevos movimientos\n"
+                    f"Registrados: {stats.get('registrados', 0)}\n"
+                    f"Duplicados: {stats.get('duplicados', 0)}\n"
+                    f"Omitidos: {stats.get('omitidos', 0)}\n"
+                    f"Errores: {stats.get('errores', 0)}"
+                )
+                if nuevos:
+                    mensaje += "\nIDs: " + ", ".join(nuevos[:5])
+                await self.bot.send_message(chat_id=config.USER_ID, text=mensaje)
+            except Exception as e:
+                logger.warning(f"No se pudo notificar por Telegram el Gmail Push: {e}")
+
+        self.set_status(200)
+        self.write({"ok": True, "stats": stats})
+
+
 class RenderWebhookApp(tornado.web.Application):
     """Webhook app con endpoints de salud para plataformas como Render."""
 
@@ -52,6 +121,7 @@ class RenderWebhookApp(tornado.web.Application):
             (r"/", HealthHandler),
             (r"/healthz/?", HealthHandler),
             (rf"{webhook_path}/?", TelegramHandler, shared_objects),
+            (r"/gmail/push/?", GmailPushHandler, shared_objects),
         ]
         super().__init__(handlers)
 
@@ -87,40 +157,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mensaje = """
-📌 *Comandos disponibles:*
+    mensaje = (
+        "📘 AYUDA RÁPIDA\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💸 MOVIMIENTOS\n"
+        "• /gasto <monto> <categoría> <nota>\n"
+        "  Ejemplo: /gasto 25.50 Alimentacion almuerzo tarjeta AMEX\n"
+        "• /ingreso <monto> <categoría> <nota>\n"
+        "  Ejemplo: /ingreso 1500 Sueldo quincena BCP\n"
+        "• /categoria <nombre> - Gasto del mes en una categoría\n\n"
+        "📊 REPORTES\n"
+        "• /resumen - Saldos de todas las cuentas y patrimonio neto\n"
+        "• /mes <MM/AAAA> - Balance mensual (por defecto mes actual)\n"
+        "• /reporte <MM/AAAA> - Exporta cierre mensual en PDF con gráficos\n\n"
+        "💳 DEUDAS\n"
+        "• /deudas - Lista de tarjetas de crédito con saldo pendiente\n"
+        "• /pagar <deuda_id> <monto> <cuenta_banco> [nota]\n"
+        "  Ejemplo: /pagar 1 250 BCP pago quincena\n\n"
+        "🧾 GESTIÓN\n"
+        "• /editar <ID> <campo> <valor> - Edita una transacción\n"
+        "• /eliminar <ID> - Elimina una transacción\n"
+        "• /categorias - Listado de categorías\n"
+        "• /pendiente <tipo> <monto> <cuenta> <descripcion>\n"
+        "• /pendientes [N] - Lista movimientos pendientes\n"
+        "• /confirmar_pendiente <ID> <categoria> [nota]\n"
+        "• /descartar_pendiente <ID> [motivo]\n"
+        "• /conciliar <cuenta> <saldo_real> [moneda]\n"
+        "• /snapshot - Guarda snapshot manual de saldos\n\n"
+        "📬 GMAIL PUSH\n"
+        "• /gmail_watch - Crea o renueva el watch de Gmail Push\n"
+        "• /gmail_estado - Muestra el estado actual del watch\n\n"
+        "🎙️ VOZ\n"
+        "• Envía una nota de voz con el comando en lenguaje natural.\n"
+        "• El bot transcribe, interpreta y te pedirá confirmar antes de registrar.\n"
+        "• Botones: Confirmar / Editar / Cancelar\n\n"
+        "✨ CONSEJOS\n"
+        "• Tildes y mayúsculas se ignoran.\n"
+        "• Para cuentas, escribe el nombre tal cual (BCP, AMEX, Efectivo).\n"
+        "• Puedes usar USD: /gasto 20 USD Comida\n\n"
+        "Escribe /ayuda o /help cuando quieras volver a ver esta lista."
+    )
+    await update.message.reply_text(mensaje)
 
-/gasto <monto> <categoría> <nota>
-Ejemplo: `/gasto 25.50 Alimentacion almuerzo tarjeta AMEX`
 
-/ingreso <monto> <categoría> <nota>
-Ejemplo: `/ingreso 1500 Sueldo quincena BCP`
-
-/resumen - Saldos de todas las cuentas y patrimonio neto
-/mes <MM/AAAA> - Balance mensual (por defecto mes actual)
-/reporte <MM/AAAA> - Exporta cierre mensual en PDF con gráficos
-/categoria <nombre> - Gasto del mes en una categoría
-/deudas - Lista de tarjetas de crédito con saldo pendiente
-/pagar <deuda_id> <monto> <cuenta_banco> [nota]
-Ejemplo: `/pagar 1 250 BCP pago quincena`
-
-/recordatorios - Ver alertas de deudas por vencer (manual)
-/editar <ID> <campo> <valor> - Edita una transacción
-/eliminar <ID> - Elimina una transacción
-/categorias - Listado de categorías
-/help o /ayuda - Mostrar este mensaje
-
-🎤 *Notas de voz (es-PE):*
-- Envía una nota de voz con el comando en lenguaje natural.
-- El bot transcribe, interpreta y te pedirá confirmar antes de registrar.
-- Botones: Confirmar / Editar / Cancelar
-
-💡 *Consejos:*
-- Tildes y mayúsculas se ignoran.
-- Para cuentas, escribe el nombre tal cual (BCP, AMEX, Efectivo).
-- Puedes usar "USD": `/gasto 20 USD Comida`
-"""
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.exception("Error no controlado en el bot", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "❌ Ocurrió un error inesperado al procesar tu solicitud."
+            )
+        except Exception:
+            pass
 
 
 def _resumen_payload(payload):
@@ -246,7 +334,10 @@ async def _ejecutar_payload_voz(payload, update: Update):
                 return
             mensaje = "💳 *Deudas Activas*\n\n"
             for d in deudas_activas:
-                mensaje += f"• {d['descripcion']}\n"
+                if d.get("id"):
+                    mensaje += f"• ID {d['id']} - {d['descripcion']}\n"
+                else:
+                    mensaje += f"• {d['descripcion']}\n"
                 mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
                 mensaje += f"   Vence: {d['vencimiento']}\n"
                 if d['cuenta']:
@@ -269,8 +360,9 @@ async def _ejecutar_payload_voz(payload, update: Update):
                 else:
                     estado = f"Vence en {r['dias_restantes']} día(s)"
 
+                encabezado = f"• ID {r['id']} - {r['descripcion']}" if r.get("id") else f"• {r['descripcion']}"
                 lineas.append(
-                    f"\n• {r['descripcion']} ({r['cuenta']})\n"
+                    f"\n{encabezado} ({r['cuenta']})\n"
                     f"  Pendiente: {r['moneda']} {r['pendiente']:,.2f}\n"
                     f"  Vencimiento: {r['vencimiento']} - {estado}"
                 )
@@ -308,7 +400,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
     if intent == "pagar":
         data = pagar_deuda(
             deuda_id=str(payload.get("deuda_id")).strip(),
-            monto=float(payload.get("monto")),
+            monto=parsear_numero(payload.get("monto")),
             moneda_pago=payload.get("moneda", "PEN"),
             cuenta_banco=payload.get("cuenta", ""),
             nota=payload.get("raw_text", ""),
@@ -386,9 +478,10 @@ async def _ejecutar_payload_voz(payload, update: Update):
         return
 
     if intent == "ingreso":
+        monto = parsear_numero(payload.get("monto"))
         trans_id = add_transaction(
             "Ingreso",
-            float(payload.get("monto")),
+            monto,
             payload.get("moneda", "PEN"),
             payload.get("categoria", ""),
             "",
@@ -403,9 +496,10 @@ async def _ejecutar_payload_voz(payload, update: Update):
     cuenta = payload.get("cuenta", "Efectivo")
     tipo_cuenta = obtener_tipo_cuenta(cuenta)
     metodo = metodo_por_tipo_cuenta(tipo_cuenta)
+    monto = parsear_numero(payload.get("monto"))
     trans_id = add_transaction(
         "Gasto",
-        float(payload.get("monto")),
+        monto,
         payload.get("moneda", "PEN"),
         payload.get("categoria", ""),
         "",
@@ -544,7 +638,7 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        monto_str = partes[0].replace(",", ".")
+        monto_str = partes[0]
         moneda = "PEN"
         idx_categoria = 1
 
@@ -556,7 +650,9 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             moneda = "USD"
             idx_categoria = 2
 
-        monto = float(monto_str)
+        monto = parsear_numero(monto_str)
+        if monto <= 0:
+            raise ValueError
     except ValueError:
         await update.message.reply_text("❌ Monto inválido.")
         return
@@ -631,7 +727,7 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        monto_str = partes[0].replace(",", ".")
+        monto_str = partes[0]
         moneda = "PEN"
         idx_categoria = 1
 
@@ -642,7 +738,9 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
             moneda = "USD"
             idx_categoria = 2
 
-        monto = float(monto_str)
+        monto = parsear_numero(monto_str)
+        if monto <= 0:
+            raise ValueError
     except ValueError:
         await update.message.reply_text("❌ Monto inválido.")
         return
@@ -790,7 +888,10 @@ async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     mensaje = "💳 *Deudas Activas*\n\n"
     for d in deudas_activas:
-        mensaje += f"• {d['descripcion']}\n"
+        if d.get("id"):
+            mensaje += f"• ID {d['id']} - {d['descripcion']}\n"
+        else:
+            mensaje += f"• {d['descripcion']}\n"
         mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
         mensaje += f"   Vence: {d['vencimiento']}\n"
         if d['cuenta']:
@@ -897,7 +998,9 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deuda_id = context.args[0].strip()
     try:
-        monto = float(context.args[1].replace(",", "."))
+        monto = parsear_numero(context.args[1])
+        if monto <= 0:
+            raise ValueError
     except ValueError:
         await update.message.reply_text("❌ Monto inválido.")
         return
@@ -1000,6 +1103,67 @@ async def enviar_keepalive(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning("Keep-alive ping falló | url=%s error=%s", config.KEEPALIVE_URL, e)
 
+
+async def enviar_snapshot_diario(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = generar_snapshot_saldos(origen="AutoDiario")
+        logger.info(
+            "Snapshot diario generado | id=%s cuentas=%s total_pen=%.2f",
+            data.get("snapshot_id"),
+            data.get("cuentas"),
+            data.get("total_pen", 0.0),
+        )
+    except Exception as e:
+        logger.error(f"Error en snapshot diario: {e}")
+
+
+async def renovar_watch_gmail_periodico(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = renovar_watch_si_necesario(force=False)
+        logger.info(
+            "Gmail watch activo | history_id=%s expiration=%s",
+            data.get("historyId") or data.get("history_id"),
+            data.get("expiration"),
+        )
+    except GmailPushError as e:
+        logger.warning(f"No se pudo renovar Gmail watch: {e}")
+    except Exception as e:
+        logger.error(f"Error inesperado renovando Gmail watch: {e}")
+
+
+@restricted
+async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = iniciar_watch_gmail(force=True)
+        await update.message.reply_text(
+            "📡 Gmail Push activado\n"
+            f"HistoryId: {data.get('historyId', '—')}\n"
+            f"Expiration: {data.get('expiration', '—')}\n"
+            f"Topic: {config.GMAIL_PUSH_TOPIC_NAME}"
+        )
+    except GmailPushError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error en /gmail_watch: {e}")
+        await update.message.reply_text("❌ Error inesperado al activar Gmail Push.")
+
+
+@restricted
+async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    estado = obtener_estado_gmail_push_resumido()
+    mensaje = (
+        "📮 *Estado Gmail Push*\n"
+        f"• Active email: {config.GMAIL_USER_EMAIL or '—'}\n"
+        f"• Topic: {estado.get('watch_topic') or config.GMAIL_PUSH_TOPIC_NAME or '—'}\n"
+        f"• Last historyId: {estado.get('last_history_id') or '—'}\n"
+        f"• Expiration: {estado.get('watch_expiration') or '—'}\n"
+        f"• Last push: {estado.get('last_push_at') or '—'}\n"
+        f"• Pending source: GmailPush\n"
+        f"• Bot mode: {config.BOT_MODE}\n"
+        f"• Webhook URL: {config.FULL_WEBHOOK_URL or '—'}"
+    )
+    await update.message.reply_text(mensaje, parse_mode="Markdown")
+
 @restricted
 async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -1022,13 +1186,191 @@ async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             estado = f"Vence en {r['dias_restantes']} día(s)"
 
+        encabezado = f"• ID {r['id']} - {r['descripcion']}" if r.get("id") else f"• {r['descripcion']}"
         lineas.append(
-            f"\n• {r['descripcion']} ({r['cuenta']})\n"
+            f"\n{encabezado} ({r['cuenta']})\n"
             f"  Pendiente: {r['moneda']} {r['pendiente']:,.2f}\n"
             f"  Vencimiento: {r['vencimiento']} - {estado}"
         )
 
     await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+
+
+@restricted
+async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 4:
+        await update.message.reply_text(
+            "⚠️ Uso: `/pendiente <tipo> <monto> <cuenta> <descripcion>`\n"
+            "Ejemplo: `/pendiente ingreso 1500 BCP transferencia cliente X`",
+            parse_mode="Markdown",
+        )
+        return
+
+    tipo = context.args[0].strip()
+    monto = context.args[1].strip()
+    cuenta = context.args[2].strip()
+    descripcion = " ".join(context.args[3:]).strip()
+
+    try:
+        pend_id = registrar_movimiento_pendiente(
+            tipo=tipo,
+            monto=monto,
+            cuenta=cuenta,
+            descripcion=descripcion,
+            fuente="ManualTelegram",
+            moneda="PEN",
+        )
+        await update.message.reply_text(f"📝 Pendiente registrado: {pend_id}")
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error registrando pendiente: {e}")
+        await update.message.reply_text("❌ Error inesperado registrando pendiente.")
+
+
+@restricted
+async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    limit = 10
+    if context.args:
+        try:
+            limit = max(1, min(50, int(context.args[0])))
+        except ValueError:
+            pass
+
+    try:
+        pendientes = listar_movimientos_pendientes(limit=limit)
+    except Exception as e:
+        logger.error(f"Error listando pendientes: {e}")
+        await update.message.reply_text("❌ Error al listar pendientes.")
+        return
+
+    if not pendientes:
+        await update.message.reply_text("✅ No hay movimientos pendientes.")
+        return
+
+    lineas = ["📥 *Movimientos pendientes*"]
+    for p in pendientes:
+        monto = parsear_numero(p.get("Monto", 0))
+        lineas.append(
+            f"\n• {p.get('ID', '')} | {p.get('Tipo', '')} {p.get('Moneda', 'PEN')} {monto:.2f}\n"
+            f"  Cuenta: {p.get('Cuenta', '')}\n"
+            f"  Desc: {p.get('Descripcion', '')}"
+        )
+
+    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+
+
+@restricted
+async def confirmar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Uso: `/confirmar_pendiente <ID> <categoria> [nota]`\n"
+            "Ejemplo: `/confirmar_pendiente MP00001 Sueldo confirmado por correo`",
+            parse_mode="Markdown",
+        )
+        return
+
+    pend_id = context.args[0].strip()
+    categoria = context.args[1].strip()
+    nota = " ".join(context.args[2:]).strip() if len(context.args) > 2 else ""
+
+    try:
+        data = confirmar_movimiento_pendiente(pend_id, categoria, nota)
+        await update.message.reply_text(
+            f"✅ Pendiente confirmado\n"
+            f"🆔 Pendiente: {data['pendiente_id']}\n"
+            f"🧾 TX: {data['tx_id']}\n"
+            f"📌 {data['tipo']} {data['moneda']} {data['monto']:.2f}"
+        )
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error confirmando pendiente: {e}")
+        await update.message.reply_text("❌ Error inesperado al confirmar pendiente.")
+
+
+@restricted
+async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Uso: `/descartar_pendiente <ID> [motivo]`",
+            parse_mode="Markdown",
+        )
+        return
+
+    pend_id = context.args[0].strip()
+    motivo = " ".join(context.args[1:]).strip() if len(context.args) > 1 else ""
+
+    try:
+        data = descartar_movimiento_pendiente(pend_id, motivo)
+        await update.message.reply_text(f"🗑️ Pendiente descartado: {data['pendiente_id']}")
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error descartando pendiente: {e}")
+        await update.message.reply_text("❌ Error inesperado al descartar pendiente.")
+
+@restricted
+async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ Uso: `/conciliar <cuenta> <saldo_real> [moneda]`\n"
+            "Ejemplo: `/conciliar BCP 1234.56 PEN`",
+            parse_mode="Markdown",
+        )
+        return
+
+    cuenta = context.args[0].strip()
+    saldo_real = context.args[1].strip()
+    moneda = context.args[2].strip().upper() if len(context.args) > 2 else "PEN"
+
+    try:
+        data = conciliar_cuenta(cuenta, saldo_real, moneda)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.error(f"Error en conciliación: {e}")
+        await update.message.reply_text("❌ Error inesperado en conciliación.")
+        return
+
+    mensaje = (
+        f"🔎 *Conciliación {data['cuenta']}*\n"
+        f"• Saldo hoja: PEN {data['saldo_hoja_pen']:,.2f}\n"
+        f"• Saldo real: PEN {data['saldo_real_pen']:,.2f}\n"
+        f"• Diferencia: PEN {data['diferencia_pen']:,.2f}"
+    )
+
+    sugerencias = data.get("sugerencias", [])
+    if not sugerencias:
+        mensaje += "\n\n✅ Sin sugerencias pendientes para esa diferencia."
+        await update.message.reply_text(mensaje, parse_mode="Markdown")
+        return
+
+    mensaje += "\n\n🧠 *Sugerencias de pendientes:*"
+    for s in sugerencias:
+        mensaje += (
+            f"\n• {s['id']} | {s['tipo']} {s['moneda']} {s['monto']:.2f}"
+            f"\n  Desc: {s['descripcion']}"
+        )
+    await update.message.reply_text(mensaje, parse_mode="Markdown")
+
+
+@restricted
+async def snapshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = generar_snapshot_saldos(origen="ManualTelegram")
+        await update.message.reply_text(
+            f"📸 Snapshot guardado\n"
+            f"🆔 {data['snapshot_id']}\n"
+            f"🧮 Cuentas: {data['cuentas']}\n"
+            f"💰 Total PEN: {data['total_pen']:,.2f}\n"
+            f"🕒 {data['fecha']}"
+        )
+    except Exception as e:
+        logger.error(f"Error generando snapshot: {e}")
+        await update.message.reply_text("❌ Error al generar snapshot.")
+
 
 def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
@@ -1045,12 +1387,20 @@ def main():
     app.add_handler(CommandHandler("deudas", deudas))
     app.add_handler(CommandHandler("pagar", pagar_deuda_cmd))
     app.add_handler(CommandHandler("pagar_deuda", pagar_deuda_cmd))
-    app.add_handler(CommandHandler("recordatorios", recordatorios_cmd))
+    app.add_handler(CommandHandler("pendiente", registrar_pendiente_cmd))
+    app.add_handler(CommandHandler("pendientes", listar_pendientes_cmd))
+    app.add_handler(CommandHandler("confirmar_pendiente", confirmar_pendiente_cmd))
+    app.add_handler(CommandHandler("descartar_pendiente", descartar_pendiente_cmd))
+    app.add_handler(CommandHandler("conciliar", conciliar_cmd))
+    app.add_handler(CommandHandler("gmail_watch", gmail_watch_cmd))
+    app.add_handler(CommandHandler("gmail_estado", gmail_estado_cmd))
+    app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
     app.add_handler(CallbackQueryHandler(callbacks_voz, pattern=r"^voice:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, procesar_nota_voz))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_edicion_voz))
+    app.add_error_handler(error_handler)
 
     if app.job_queue is not None:
         for dias in VENTANAS_RECORDATORIO_DIAS:
@@ -1075,6 +1425,31 @@ def main():
                 "Keep-alive activo | cada %s min | url=%s",
                 config.KEEPALIVE_INTERVAL_MINUTES,
                 config.KEEPALIVE_URL,
+            )
+
+        # Snapshot diario para auditoría (Fase 2)
+        app.job_queue.run_daily(
+            enviar_snapshot_diario,
+            time=time(hour=23, minute=55),
+            name="snapshot_diario",
+        )
+
+        if config.GMAIL_PUSH_ENABLED:
+            try:
+                watch_data = iniciar_watch_gmail(force=False)
+                logger.info(
+                    "Gmail Push activado | history_id=%s expiration=%s topic=%s",
+                    watch_data.get("historyId") or watch_data.get("history_id"),
+                    watch_data.get("expiration"),
+                    config.GMAIL_PUSH_TOPIC_NAME,
+                )
+            except GmailPushError as e:
+                logger.error(f"No se pudo iniciar Gmail Push: {e}")
+
+            app.job_queue.run_daily(
+                renovar_watch_gmail_periodico,
+                time=time(hour=9, minute=0),
+                name="gmail_watch_renewal",
             )
     else:
         logger.warning("JobQueue no disponible; recordatorios automáticos desactivados.")
@@ -1105,6 +1480,11 @@ def main():
         )
     else:
         logger.info("Iniciando en modo polling.")
+        if config.GMAIL_PUSH_ENABLED:
+            logger.warning(
+                "Gmail Push está habilitado pero el bot corre en modo polling. "
+                "/gmail/push no recibirá notificaciones hasta ejecutar BOT_MODE=webhook."
+            )
         app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
