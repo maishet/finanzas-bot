@@ -1158,6 +1158,7 @@ async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Last historyId: {estado.get('last_history_id') or '—'}\n"
         f"• Expiration: {estado.get('watch_expiration') or '—'}\n"
         f"• Last push: {estado.get('last_push_at') or '—'}\n"
+        f"• Last push message count: {estado.get('last_push_message_count') or '—'}\n"
         f"• Pending source: GmailPush\n"
         f"• Bot mode: {config.BOT_MODE}\n"
         f"• Webhook URL: {config.FULL_WEBHOOK_URL or '—'}"

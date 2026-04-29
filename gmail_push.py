@@ -547,6 +547,19 @@ def _procesar_notificacion_gmail_push_sync(envelope):
             )
             nuevos_ids.append(pend_id)
             stats["registrados"] += 1
+        except GmailPushError as e:
+            error_txt = str(e)
+            if "404" in error_txt and "not found" in error_txt.lower():
+                logger.warning(
+                    "Mensaje Gmail %s omitido porque Gmail API ya no lo encuentra | error=%s",
+                    message_id,
+                    error_txt,
+                )
+                stats["omitidos"] += 1
+                continue
+
+            logger.error("Error procesando mensaje Gmail %s: %s", message_id, e)
+            stats["errores"] += 1
         except Exception as e:
             logger.error("Error procesando mensaje Gmail %s: %s", message_id, e)
             stats["errores"] += 1
