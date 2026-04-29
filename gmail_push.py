@@ -180,6 +180,19 @@ def _detectar_moneda(texto):
 def _detectar_tipo(texto):
     texto_norm = normalizar_texto(texto)
 
+    # Correos de Yape saliente: si el texto indica que realizaste el yapeo,
+    # se registra como gasto porque representa una salida de dinero hacia un tercero.
+    kw_yape_gasto = [
+        "realizaste un yapeo",
+        "yapeo a celular",
+        "yapear a celular",
+        "enviaste un yapeo",
+        "yape enviado",
+        "yapeo enviado",
+    ]
+    if any(kw in texto_norm for kw in kw_yape_gasto):
+        return "Gasto"
+
     kw_transferencia = [
         "transferencia entre mis cuentas",
         "transferencia propia",
@@ -189,9 +202,6 @@ def _detectar_tipo(texto):
         "realizaste un deposito en",
         "deposito en tu cuenta",
         "envio automatico",
-        "yapeo",
-        "yapear",
-        "yape",
         "pago de tarjeta propia",
     ]
 
@@ -215,6 +225,8 @@ def _detectar_tipo(texto):
         "pago realizado",
         "pago de servicios",
         "consumo tarjeta de credito",
+        "yape",
+        "yapear",
     ]
 
     if any(kw in texto_norm for kw in kw_transferencia):
