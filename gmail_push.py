@@ -230,6 +230,7 @@ def _detectar_tipo(texto):
     ]
 
     if any(kw in texto_norm for kw in kw_transferencia):
+        # Retorna tipo especial "Transferencia" para procesamiento posterior con cuenta
         return "Transferencia"
 
     score_ingreso = sum(1 for kw in kw_ingreso if kw in texto_norm)
@@ -296,6 +297,23 @@ def _detectar_cuenta(texto, nombres_cuentas):
     return ""
 
 
+def _refinar_tipo_transferencia(texto, cuenta):
+    """Si el tipo es 'Transferencia', refina a Ingreso o Gasto basado en la cuenta detectada."""
+    texto_norm = normalizar_texto(texto)
+    cuenta_norm = normalizar_texto(cuenta)
+    
+    # Buscar si la cuenta aparece en contexto "Enviado a" (destino = Ingreso)
+    if re.search(rf"enviado\s+a.*{re.escape(cuenta_norm)}", texto_norm):
+        return "Ingreso"
+    
+    # Buscar si la cuenta aparece en contexto "Desde" (origen = Gasto)
+    if re.search(rf"desde.*{re.escape(cuenta_norm)}", texto_norm):
+        return "Gasto"
+    
+    # Si no se puede determinar, por defecto Gasto (prudencia)
+    return "Gasto"
+
+
 def _base64url_decode(data):
     if isinstance(data, str):
         data = data.encode("utf-8")
@@ -346,6 +364,10 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
             subject=subject[:120] if subject else "—",
         )
         return None
+
+    # Si el tipo es "Transferencia" (especial), refinar a Ingreso o Gasto usando la cuenta
+    if tipo == "Transferencia":
+        tipo = _refinar_tipo_transferencia(texto, cuenta)
 
     moneda = _detectar_moneda(texto)
     mensaje_id = (msg.get("Message-ID", "") or "").strip().strip("<>")
