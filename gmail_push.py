@@ -280,6 +280,12 @@ def _extraer_monto(texto):
 
 def _detectar_cuenta(texto, nombres_cuentas):
     texto_norm = normalizar_texto(texto)
+    ultimos4 = re.findall(r"(?<!\d)(\d{4})(?!\d)", texto or "")
+    for suf in ultimos4:
+        cuenta_obj = detectar_cuenta_por_ultimos_digitos(suf)
+        if cuenta_obj and cuenta_obj.get("Nombre"):
+            return cuenta_obj["Nombre"]
+
     nombres_ordenados = sorted(nombres_cuentas, key=lambda c: len(str(c or "")), reverse=True)
     for nombre in nombres_ordenados:
         nombre_norm = normalizar_texto(nombre)
@@ -288,12 +294,6 @@ def _detectar_cuenta(texto, nombres_cuentas):
         patron = rf"(^|\s){re.escape(nombre_norm)}(\s|$)"
         if re.search(patron, texto_norm):
             return nombre
-
-    ultimos4 = re.findall(r"(?<!\d)(\d{4})(?!\d)", texto or "")
-    for suf in ultimos4:
-        cuenta_obj = detectar_cuenta_por_ultimos_digitos(suf)
-        if cuenta_obj and cuenta_obj.get("Nombre"):
-            return cuenta_obj["Nombre"]
     return ""
 
 
