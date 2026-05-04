@@ -1340,7 +1340,9 @@ def obtener_resumen_cuentas():
     total_activos = 0.0
     total_pasivos = 0.0
     for i, c in enumerate(cuentas, start=2):
-        saldo = parsear_numero(c.get("SaldoActual", 0))
+        # Leer SaldoActual directamente de la celda F con FORMATTED_VALUE para evitar truncamiento
+        celda_saldo = cuentas_ws.acell(f"F{i}", value_render_option="FORMATTED_VALUE").value
+        saldo = parsear_numero(celda_saldo if celda_saldo is not None else c.get("SaldoActual", 0))
         tipo = normalizar_texto(c.get("Tipo", ""))
         if tipo in ["efectivo", "banco", "ahorro"]:
             total_activos += saldo
