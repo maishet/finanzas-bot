@@ -97,6 +97,47 @@ def _asegurar_hoja_snapshots():
 
 snap_ws = _asegurar_hoja_snapshots()
 
+_SHEET_CACHE = {}
+_CACHE_TTL_SECONDS = 10
+
+
+def _cache_get(key):
+    entry = _SHEET_CACHE.get(key)
+    if not entry:
+        return None
+    timestamp, value = entry
+    if (datetime.now() - timestamp).total_seconds() > _CACHE_TTL_SECONDS:
+        _SHEET_CACHE.pop(key, None)
+        return None
+    return value
+
+
+def _cache_set(key, value):
+    _SHEET_CACHE[key] = (datetime.now(), value)
+    return value
+
+
+def _cache_invalidate(*keys):
+    if not keys:
+        _SHEET_CACHE.clear()
+        return
+    for key in keys:
+        _SHEET_CACHE.pop(key, None)
+
+
+def _leer_records_cacheados(worksheet, cache_key):
+    valor = _cache_get(cache_key)
+    if valor is not None:
+        return valor
+    return _cache_set(cache_key, worksheet.get_all_records())
+
+
+def _leer_values_cacheados(worksheet, cache_key):
+    valor = _cache_get(cache_key)
+    if valor is not None:
+        return valor
+    return _cache_set(cache_key, worksheet.get_all_values())
+
 # ---------- FUNCIONES DE NORMALIZACIÓN ----------
 def normalizar_texto(texto):
     """
@@ -298,7 +339,7 @@ def registrar_movimiento_pendiente(
 
 
 def listar_movimientos_pendientes(limit=20, include_resueltos=False):
-    valores = pend_ws.get_all_values()
+    valores = _leer_values_cacheados(pend_ws, "pendientes_values")
     if not valores or len(valores) <= 1:
         return []
 
@@ -356,7 +397,7 @@ def _buscar_pendiente_por_id(pendiente_id):
     if not pid:
         return None
 
-    valores = pend_ws.get_all_values()
+    valores = _leer_values_cacheados(pend_ws, "pendientes_values")
     if not valores or len(valores) <= 1:
         return None
 
@@ -431,6 +472,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
     row = p["_row"]
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     pend_ws.update(f"J{row}:N{row}", [["Confirmado", "", tx_id, ahora, nota_extra]], value_input_option="RAW")
+    _cache_invalidate("pendientes_values")
 
     return {
         "pendiente_id": str(p.get("ID", pendiente_id)).strip(),
@@ -453,6 +495,7 @@ def descartar_movimiento_pendiente(pendiente_id, motivo=""):
     row = p["_row"]
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     pend_ws.update(f"J{row}:N{row}", [["Descartado", "", "", ahora, motivo]], value_input_option="RAW")
+    _cache_invalidate("pendientes_values")
     return {"pendiente_id": str(p.get("ID", pendiente_id)).strip(), "motivo": motivo}
 
 
@@ -523,7 +566,7 @@ def conciliar_cuenta(cuenta, saldo_real, moneda_real="PEN"):
 # ---------- CATEGORÍAS Y SUBCATEGORÍAS ----------
 def obtener_categorias(tipo=None):
     """Obtiene todas las categorías con sus subcategorías"""
-    registros = categorias_ws.get_all_records()
+    registros = _leer_records_cacheados(categorias_ws, "categorias_records")
     resultado = []
     for c in registros:
         nombre_original = c["Nombre"]
@@ -588,7 +631,7 @@ def validar_categoria(categoria_input, tipo):
 # ---------- CUENTAS ----------
 def obtener_nombres_cuentas():
     try:
-        registros = cuentas_ws.get_all_records()
+        registros = _leer_records_cacheados(cuentas_ws, "cuentas_records")
         return [c["Nombre"] for c in registros]
     except Exception as e:
         logger.error(f"Error obteniendo nombres de cuentas: {e}")
@@ -626,7 +669,7 @@ def detectar_cuenta_por_ultimos_digitos(ultimos4):
         return None
     suf = suf[-4:]
 
-    cuentas = cuentas_ws.get_all_records()
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
     for i, c in enumerate(cuentas, start=2):
         ids = _identificadores_cuenta(c)
         for ident in ids:
@@ -639,7 +682,7 @@ def detectar_cuenta_por_ultimos_digitos(ultimos4):
 
 def obtener_estado_gmail_push(clave=None, default=None):
     """Obtiene el estado persistido de Gmail Push como key/value."""
-    valores = gmail_estado_ws.get_all_values()
+    valores = _leer_values_cacheados(gmail_estado_ws, "gmail_estado_values")
     if not valores or len(valores) <= 1:
         return default if clave else {}
 
@@ -661,7 +704,7 @@ def guardar_estado_gmail_push(**campos):
     if not campos:
         return
 
-    valores = gmail_estado_ws.get_all_values()
+    valores = _leer_values_cacheados(gmail_estado_ws, "gmail_estado_values")
     headers = valores[0] if valores else ["Clave", "Valor", "ActualizadoEn"]
     filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)] if len(valores) > 1 else []
     indice = {str(f.get("Clave", "")).strip(): idx for idx, f in enumerate(filas, start=2)}
@@ -675,6 +718,7 @@ def guardar_estado_gmail_push(**campos):
             gmail_estado_ws.update(f"B{row}:C{row}", [[valor_txt, ahora]], value_input_option="RAW")
         else:
             gmail_estado_ws.append_row([clave_txt, valor_txt, ahora], value_input_option="RAW")
+    _cache_invalidate("gmail_estado_values")
 
 def obtener_cuenta_por_nombre(nombre_input):
     """
@@ -682,7 +726,7 @@ def obtener_cuenta_por_nombre(nombre_input):
     Retorna diccionario con datos de la cuenta y número de fila.
     """
     input_norm = normalizar_texto(nombre_input)
-    cuentas = cuentas_ws.get_all_records()
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
     for i, c in enumerate(cuentas, start=2):
         if normalizar_texto(c["Nombre"]) == input_norm:
             c["_row"] = i
@@ -713,7 +757,7 @@ def detectar_cuenta_en_texto(texto):
         return None
 
     texto_norm = normalizar_texto(texto)
-    cuentas = cuentas_ws.get_all_records()
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
 
     candidatos = []
     for i, c in enumerate(cuentas, start=2):
@@ -741,12 +785,10 @@ def detectar_cuenta_en_texto(texto):
 
 # ---------- DEUDAS ----------
 def obtener_deudas_con_fila():
-    deudas = deudas_ws.get_all_records()
+    deudas = _leer_records_cacheados(deudas_ws, "deudas_records")
     resultado = []
     for i, d in enumerate(deudas, start=2):
         d["_row"] = i
-        d["MontoTotal"] = deudas_ws.acell(f"D{i}", value_render_option="FORMATTED_VALUE").value
-        d["MontoPagado"] = deudas_ws.acell(f"F{i}", value_render_option="FORMATTED_VALUE").value
         resultado.append(d)
     return resultado
 
@@ -834,11 +876,10 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
     monto_origen = parsear_numero(monto)
     monto_convertido = convertir_moneda(monto_origen, moneda, moneda_deuda)
 
-    # Leer el valor formateado directamente de la celda para evitar ambigüedades regionales.
-    celda_monto_total = deudas_ws.acell(f"D{row}", value_render_option="FORMATTED_VALUE").value
-    monto_total_actual = parsear_numero(celda_monto_total if celda_monto_total is not None else deuda.get("MontoTotal", 0))
+    monto_total_actual = parsear_numero(deuda.get("MontoTotal", 0))
     nuevo_total = round(monto_total_actual + monto_convertido, 2)
     deudas_ws.update(f"D{row}", [[nuevo_total]], value_input_option="RAW")
+    _cache_invalidate("deudas_records")
 
     logger.info(
         "Deuda update | id=%s cuenta=%s fila=%s moneda_deuda=%s celda_raw='%s' "
@@ -847,7 +888,7 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
         nombre_cuenta,
         row,
         moneda_deuda,
-        celda_monto_total,
+        deuda.get("MontoTotal", 0),
         monto_total_actual,
         monto_origen,
         (moneda or "PEN").upper(),
@@ -892,13 +933,13 @@ def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta):
     moneda_deuda = str(deuda.get("Moneda", "PEN")).upper()
     delta_convertido = convertir_moneda(parsear_numero(delta_monto), moneda_delta, moneda_deuda)
 
-    celda_monto_total = deudas_ws.acell(f"D{row}", value_render_option="FORMATTED_VALUE").value
-    monto_total_actual = parsear_numero(celda_monto_total if celda_monto_total is not None else deuda.get("MontoTotal", 0))
+    monto_total_actual = parsear_numero(deuda.get("MontoTotal", 0))
     nuevo_total = round(monto_total_actual + delta_convertido, 2)
     if nuevo_total < 0:
         nuevo_total = 0.0
 
     deudas_ws.update(f"D{row}", [[nuevo_total]], value_input_option="RAW")
+    _cache_invalidate("deudas_records")
     logger.info(
         "Deuda ajuste | id=%s fila=%s actual=%.2f delta=%.2f %s convertido=%.2f %s nuevo=%.2f",
         deuda_id,
@@ -917,11 +958,10 @@ def obtener_transaccion_por_id(trans_id):
     if not trans_id_norm:
         return None
 
-    transacciones = trans_ws.get_all_records()
+    transacciones = _leer_records_cacheados(trans_ws, "transacciones_records")
     for i, t in enumerate(transacciones, start=2):
         if str(t.get("ID", "")).strip().upper() == trans_id_norm:
             t["_row"] = i
-            t["Monto"] = trans_ws.acell(f"D{i}", value_render_option="FORMATTED_VALUE").value
             return t
     return None
 
@@ -954,6 +994,7 @@ def eliminar_transaccion(trans_id):
         ajustar_monto_deuda(deuda_id, -monto, moneda)
 
     trans_ws.delete_rows(row)
+    _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
     sincronizar_estado_deudas()
 
     return {
@@ -1057,6 +1098,7 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
         nuevo_deuda_id,
     ]]
     trans_ws.update(f"A{row}:K{row}", fila, value_input_option="RAW")
+    _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
     sincronizar_estado_deudas()
 
     return {
@@ -1073,8 +1115,7 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
         return False
 
     fila = cuenta["_row"]
-    celda_saldo = cuentas_ws.acell(f"F{fila}", value_render_option="FORMATTED_VALUE").value
-    saldo_actual = parsear_numero(celda_saldo if celda_saldo is not None else cuenta.get("SaldoActual", 0))
+    saldo_actual = parsear_numero(cuenta.get("SaldoActual", 0))
 
     if tipo_transaccion.lower() == "ingreso":
         nuevo_saldo = saldo_actual + monto_pen
@@ -1085,6 +1126,7 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
 
     nuevo_saldo = round(nuevo_saldo, 2)
     cuentas_ws.update(f"F{fila}", [[nuevo_saldo]], value_input_option="RAW")
+    _cache_invalidate("cuentas_records")
     logger.info(f"Saldo de '{nombre_cuenta}' actualizado: {saldo_actual} -> {nuevo_saldo}")
     return True
 
@@ -1092,9 +1134,7 @@ def obtener_saldo_actual_cuenta(nombre_cuenta):
     cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
     if not cuenta:
         return None
-    fila = cuenta["_row"]
-    celda_saldo = cuentas_ws.acell(f"F{fila}", value_render_option="FORMATTED_VALUE").value
-    return parsear_numero(celda_saldo if celda_saldo is not None else cuenta.get("SaldoActual", 0))
+    return parsear_numero(cuenta.get("SaldoActual", 0))
 
 # ---------- TRANSACCIONES ----------
 def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuenta="Efectivo", metodo="Efectivo", nota="", fecha=None):
@@ -1145,6 +1185,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     ]
     
     trans_ws.append_row(nueva_fila, value_input_option="RAW")
+    _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
     logger.info(f"Transacción {trans_id}: {tipo} {monto} {moneda} -> {categoria_original} / {subcategoria}")
     
     actualizar_saldo_cuenta(cuenta_final, tipo, monto_pen)
@@ -1172,10 +1213,8 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     moneda_deuda = str(deuda.get("Moneda", "PEN")).upper()
     fecha_venc_actual = parsear_fecha(deuda.get("FechaVencimiento"))
 
-    celda_total = deudas_ws.acell(f"D{row_deuda}", value_render_option="FORMATTED_VALUE").value
-    celda_pagado = deudas_ws.acell(f"F{row_deuda}", value_render_option="FORMATTED_VALUE").value
-    monto_total = parsear_numero(celda_total if celda_total is not None else deuda.get("MontoTotal", 0))
-    monto_pagado = parsear_numero(celda_pagado if celda_pagado is not None else deuda.get("MontoPagado", 0))
+    monto_total = parsear_numero(deuda.get("MontoTotal", 0))
+    monto_pagado = parsear_numero(deuda.get("MontoPagado", 0))
     pendiente = round(monto_total - monto_pagado, 2)
 
     estado_norm = normalizar_texto(deuda.get("Estado", ""))
@@ -1212,6 +1251,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     # Actualizar MontoPagado en la deuda.
     nuevo_pagado = round(monto_pagado + pago_en_moneda_deuda, 2)
     deudas_ws.update(f"F{row_deuda}", [[nuevo_pagado]], value_input_option="RAW")
+    _cache_invalidate("deudas_records")
 
     # Avanzar vencimiento un mes en cada pago registrado.
     # Si el pago completa la deuda, marcamos la fila actual como Pagada y
@@ -1243,9 +1283,11 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
                 deuda.get("CuentaAsociada", ""),
             ]
             deudas_ws.append_row(nueva_fila, value_input_option="RAW")
+            _cache_invalidate("deudas_records")
     else:
         # Si no se completó, actualizar la fecha de vencimiento si procede
         deudas_ws.update(f"G{row_deuda}", [[fecha_venc_nueva.strftime("%d/%m/%Y")]], value_input_option="RAW")
+        _cache_invalidate("deudas_records")
 
     # Registrar transacción del pago de deuda.
     trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
@@ -1268,6 +1310,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
         deuda_id_str,
     ]
     trans_ws.append_row(fila, value_input_option="RAW")
+    _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
 
     # Descontar saldo del banco.
     actualizar_saldo_cuenta(cuenta_banco, "gasto", pago_en_pen)
@@ -1292,13 +1335,12 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
 # ---------- CONSULTAS PARA COMANDOS ----------
 def obtener_resumen_cuentas():
     """Devuelve saldo de cada cuenta, total activos, total pasivos (créditos) y patrimonio neto"""
-    cuentas = cuentas_ws.get_all_records()
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
     resumen = []
     total_activos = 0.0
     total_pasivos = 0.0
     for i, c in enumerate(cuentas, start=2):
-        saldo_celda = cuentas_ws.acell(f"F{i}", value_render_option="FORMATTED_VALUE").value
-        saldo = parsear_numero(saldo_celda if saldo_celda is not None else c.get("SaldoActual", 0))
+        saldo = parsear_numero(c.get("SaldoActual", 0))
         tipo = normalizar_texto(c.get("Tipo", ""))
         if tipo in ["efectivo", "banco", "ahorro"]:
             total_activos += saldo
@@ -1325,7 +1367,7 @@ def obtener_balance_mes(mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    valores = trans_ws.get_all_values()
+    valores = _leer_values_cacheados(trans_ws, "transacciones_values")
     if not valores or len(valores) <= 1:
         return {
             "mes": mes,
@@ -1374,7 +1416,7 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    valores = trans_ws.get_all_values()
+    valores = _leer_values_cacheados(trans_ws, "transacciones_values")
     if not valores or len(valores) <= 1:
         return {
             "categoria": categoria_original,
@@ -1415,15 +1457,13 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
 def obtener_deudas_activas():
     """Lista deudas (tarjetas) con saldo pendiente > 0 o estado 'Activa'"""
     sincronizar_estado_deudas()
-    deudas = deudas_ws.get_all_records()
+    deudas = _leer_records_cacheados(deudas_ws, "deudas_records")
     activas = []
     for i, d in enumerate(deudas, start=2):
         if normalizar_texto(d.get("Estado", "")) != "activa":
             continue
-        monto_total_cell = deudas_ws.acell(f"D{i}", value_render_option="FORMATTED_VALUE").value
-        monto_pagado_cell = deudas_ws.acell(f"F{i}", value_render_option="FORMATTED_VALUE").value
-        monto_total = parsear_numero(monto_total_cell if monto_total_cell is not None else d.get("MontoTotal", 0))
-        monto_pagado = parsear_numero(monto_pagado_cell if monto_pagado_cell is not None else d.get("MontoPagado", 0))
+        monto_total = parsear_numero(d.get("MontoTotal", 0))
+        monto_pagado = parsear_numero(d.get("MontoPagado", 0))
         pendiente = monto_total - monto_pagado
         if pendiente > 0:
             activas.append({
@@ -1502,7 +1542,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
         fecha_dt = datetime.now()
 
     snapshot_id = _siguiente_id_snapshot()
-    cuentas = cuentas_ws.get_all_records()
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
     filas = []
     total_pen = 0.0
 
@@ -1511,8 +1551,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
         tipo = str(c.get("Tipo", "")).strip()
         moneda = str(c.get("Moneda", "PEN")).strip().upper() or "PEN"
 
-        saldo_celda = cuentas_ws.acell(f"F{i}", value_render_option="FORMATTED_VALUE").value
-        saldo = round(parsear_numero(saldo_celda if saldo_celda is not None else c.get("SaldoActual", 0)), 2)
+        saldo = round(parsear_numero(c.get("SaldoActual", 0)), 2)
         try:
             saldo_pen = round(convertir_a_pen(saldo, moneda), 2)
         except ValueError:
@@ -1554,7 +1593,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         año = ahora.year
 
     # Usar valores formateados para respetar configuración regional de la hoja.
-    valores = trans_ws.get_all_values()
+    valores = _leer_values_cacheados(trans_ws, "transacciones_values")
     if not valores or len(valores) <= 1:
         return {
             "mes": mes,
