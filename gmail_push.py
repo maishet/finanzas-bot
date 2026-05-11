@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 import config
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from sheets_handler import (
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
+_GMAIL_AUTH_BROKEN = False
 
 
 class GmailPushError(Exception):
@@ -80,6 +82,14 @@ def _remitente_permitido(sender_email):
 
 
 def _credenciales_gmail():
+    global _GMAIL_AUTH_BROKEN
+
+    if _GMAIL_AUTH_BROKEN:
+        raise GmailPushError(
+            "La autenticación de Gmail Push quedó deshabilitada por un invalid_grant previo. "
+            "Regenera GMAIL_REFRESH_TOKEN y reinicia el bot."
+        )
+
     if not config.GMAIL_CLIENT_ID or not config.GMAIL_CLIENT_SECRET or not config.GMAIL_REFRESH_TOKEN:
         raise GmailPushError(
             "Faltan credenciales de Gmail. Revisa GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET y GMAIL_REFRESH_TOKEN."
@@ -95,7 +105,21 @@ def _credenciales_gmail():
     )
 
     if not creds.valid or creds.expired:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError as e:
+            error_txt = str(e)
+            if "invalid_grant" in error_txt:
+                _GMAIL_AUTH_BROKEN = True
+                logger.error(
+                    "Gmail Push deshabilitado: el refresh token fue revocado o expiró. "
+                    "Genera uno nuevo y actualiza GMAIL_REFRESH_TOKEN."
+                )
+                raise GmailPushError(
+                    "invalid_grant: el refresh token de Gmail fue revocado o expiró. "
+                    "Genera uno nuevo con generate_gmail_refresh_token.py y actualiza GMAIL_REFRESH_TOKEN."
+                ) from e
+            raise GmailPushError(f"No se pudo refrescar el token de Gmail: {error_txt}") from e
     return creds
 
 
@@ -481,6 +505,13 @@ async def procesar_notificacion_gmail_push(envelope):
 
 
 def _procesar_notificacion_gmail_push_sync(envelope):
+    if _GMAIL_AUTH_BROKEN:
+        logger.warning(
+            "Gmail Push omitido porque la autenticación quedó rota por invalid_grant. "
+            "Regenera el refresh token para reactivarlo."
+        )
+        return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "auth invalid_grant"}
+
     if not config.GMAIL_PUSH_ENABLED:
         logger.warning("Gmail Push ignorado porque está deshabilitado en configuración.")
         return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "push deshabilitado"}
