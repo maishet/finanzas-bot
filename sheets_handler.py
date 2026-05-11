@@ -857,37 +857,31 @@ def detectar_cuenta_en_texto(texto):
 def obtener_deudas_con_fila():
     """Lee deudas de Sheets con FORMATTED_VALUE para evitar truncamiento de números."""
     try:
-        # Leer directamente de Sheets con FORMATTED_VALUE (columnas B-I, sin ID)
-        # El rango B2:I1000 contiene: Descripcion, Tipo, MontoTotal, Moneda, MontoPagado, FechaVencimiento, Estado, CuentaAsociada
-        filas_sin_id = _leer_rango_formateado("Deudas", "B2:I1000")
-        
-        # Leer solo la columna A (ID) para incluirla
-        ids_col = _leer_rango_formateado("Deudas", "A2:A1000")
+        # Leer rango completo A2:I1000 con FORMATTED_VALUE de una sola lectura
+        filas = _leer_rango_formateado("Deudas", "A2:I1000")
         
         resultado = []
-        for idx, (fila_sin_id, id_val) in enumerate(zip(filas_sin_id, ids_col), start=2):
-            if not id_val or not str(id_val[0]).strip():
+        for idx, fila in enumerate(filas, start=2):
+            # Saltear filas vacías
+            if not fila or not str(fila[0]).strip():
                 continue
-                
-            # Asegurar que la fila tiene suficientes columnas (8 columnas sin ID)
-            if len(fila_sin_id) < 8:
-                fila_sin_id = fila_sin_id + [""] * (8 - len(fila_sin_id))
             
-            # DEBUG: Log de lectura
-            logger.info(f"DEBUG deudas_con_fila - Fila {idx}: ID={id_val[0]}, MontoTotal_raw={repr(fila_sin_id[2])}")
+            # Asegurar que la fila tiene 9 columnas (A-I)
+            if len(fila) < 9:
+                fila = fila + [""] * (9 - len(fila))
             
-            # Mapear columnas: (sin ID) B=Descripcion, C=Tipo, D=MontoTotal, E=Moneda, F=MontoPagado, G=FechaVencimiento, H=Estado, I=CuentaAsociada
+            # Mapear columnas: A=ID(0), B=Descripcion(1), C=Tipo(2), D=MontoTotal(3), E=Moneda(4), F=MontoPagado(5), G=FechaVencimiento(6), H=Estado(7), I=CuentaAsociada(8)
             registro = {
-                "ID": str(id_val[0]).strip(),
-                "Descripcion": fila_sin_id[0],      # B
-                "Tipo": fila_sin_id[1],              # C
-                "MontoTotal": fila_sin_id[2],        # D - Aquí viene con FORMATTED_VALUE
-                "Moneda": fila_sin_id[3],            # E
-                "MontoPagado": fila_sin_id[4],       # F
-                "FechaVencimiento": fila_sin_id[5],  # G
-                "Estado": fila_sin_id[6],            # H
-                "CuentaAsociada": fila_sin_id[7],    # I
-                "_row": idx,  # Número de fila para actualizar después
+                "ID": str(fila[0]).strip(),
+                "Descripcion": str(fila[1]).strip(),
+                "Tipo": str(fila[2]).strip(),
+                "MontoTotal": str(fila[3]).strip(),  # FORMATTED_VALUE preserva "79,90" no "7990"
+                "Moneda": str(fila[4]).strip(),
+                "MontoPagado": str(fila[5]).strip(),
+                "FechaVencimiento": str(fila[6]).strip(),
+                "Estado": str(fila[7]).strip(),
+                "CuentaAsociada": str(fila[8]).strip(),
+                "_row": idx,
             }
             resultado.append(registro)
         
