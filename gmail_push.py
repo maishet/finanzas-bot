@@ -84,14 +84,27 @@ def _remitente_permitido(sender_email):
 def _credenciales_gmail():
     global _GMAIL_AUTH_ERROR_LOGGED_AT
 
-    if not config.GMAIL_CLIENT_ID or not config.GMAIL_CLIENT_SECRET or not config.GMAIL_REFRESH_TOKEN:
+    # Intentar cargar el token desde Sheets primero (permite actualizar sin reinicio)
+    refresh_token = None
+    try:
+        estado = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN")
+        if estado:
+            refresh_token = estado.strip()
+    except Exception:
+        pass  # Si Sheets falla, usar el de config
+
+    # Si no está en Sheets, usar el de config
+    if not refresh_token:
+        refresh_token = config.GMAIL_REFRESH_TOKEN
+
+    if not config.GMAIL_CLIENT_ID or not config.GMAIL_CLIENT_SECRET or not refresh_token:
         raise GmailPushError(
             "Faltan credenciales de Gmail. Revisa GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET y GMAIL_REFRESH_TOKEN."
         )
 
     creds = Credentials(
         token=None,
-        refresh_token=config.GMAIL_REFRESH_TOKEN,
+        refresh_token=refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=config.GMAIL_CLIENT_ID,
         client_secret=config.GMAIL_CLIENT_SECRET,
@@ -110,7 +123,7 @@ def _credenciales_gmail():
                 if "invalid_grant" in error_txt:
                     logger.error(
                         "Error de autenticación Gmail (invalid_grant): refresh token fue revocado o expiró. "
-                        "Ejecuta generate_gmail_refresh_token.py para generar uno nuevo y actualiza GMAIL_REFRESH_TOKEN."
+                        "Ejecuta /gmail_regenerate_token para ver opciones, o /setear_gmail_token <nuevo_token> para actualizar."
                     )
                 else:
                     logger.error(f"Error refrescando token de Gmail: {error_txt}")
