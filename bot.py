@@ -133,7 +133,7 @@ def restricted(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id != config.USER_ID:
-            await update.message.reply_text("⛔ No estás autorizado para usar este bot.")
+            await update.effective_message.reply_text("⛔ No estás autorizado para usar este bot.")
             return
         return await func(update, context)
     return wrapper
@@ -150,7 +150,7 @@ def metodo_por_tipo_cuenta(tipo_cuenta):
 
 @restricted
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "👋 ¡Hola! Soy tu asistente financiero personal.\n"
         "Usa /ayuda para ver los comandos disponibles."
     )
@@ -200,7 +200,7 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Puedes usar USD: /gasto 20 USD Comida\n\n"
         "Escribe /ayuda o /help cuando quieras volver a ver esta lista."
     )
-    await update.message.reply_text(mensaje)
+    await update.effective_message.reply_text(mensaje)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -211,7 +211,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
                 "❌ Ocurrió un error inesperado al procesar tu solicitud."
             )
         except Exception:
-            pass
+            logger.warning(f"No se pudo enviar mensaje de error: {context.error}")
 
 
 def _resumen_payload(payload):
@@ -546,15 +546,15 @@ async def _interpretar_y_confirmar(texto, update: Update, context: ContextTypes.
 @restricted
 async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not config.VOICE_ENABLED:
-        await update.message.reply_text("⚠️ El módulo de voz está desactivado.")
+        await update.effective_message.reply_text("⚠️ El módulo de voz está desactivado.")
         return
 
-    voice = update.message.voice or update.message.audio
+    voice = update.effective_message.voice or update.effective_message.audio
     if not voice:
-        await update.message.reply_text("⚠️ No pude leer el audio enviado.")
+        await update.effective_message.reply_text("⚠️ No pude leer el audio enviado.")
         return
 
-    await update.message.reply_text("🎤 Recibido. Transcribiendo nota de voz...")
+    await update.effective_message.reply_text("🎤 Recibido. Transcribiendo nota de voz...")
 
     try:
         tg_file = await context.bot.get_file(voice.file_id)
@@ -574,10 +574,10 @@ async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await _interpretar_y_confirmar(texto, update, context)
     except VoiceTranscriptionError as e:
-        await update.message.reply_text(f"❌ Error de transcripción: {e}")
+        await update.effective_message.reply_text(f"❌ Error de transcripción: {e}")
     except Exception as e:
         logger.error(f"Error procesando nota de voz: {e}")
-        await update.message.reply_text("❌ No pude procesar la nota de voz.")
+        await update.effective_message.reply_text("❌ No pude procesar la nota de voz.")
 
 
 @restricted
@@ -585,9 +585,9 @@ async def procesar_edicion_voz(update: Update, context: ContextTypes.DEFAULT_TYP
     if not context.user_data.get(VOICE_EDITING_KEY):
         return
 
-    texto = (update.message.text or "").strip()
+    texto = (update.effective_message.text or "").strip()
     if not texto:
-        await update.message.reply_text("⚠️ Envíame un texto para editar la interpretación.")
+        await update.effective_message.reply_text("⚠️ Envíame un texto para editar la interpretación.")
         return
 
     await _interpretar_y_confirmar(texto, update, context)
@@ -630,14 +630,14 @@ async def callbacks_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.replace("/gasto", "").strip()
+    texto = update.effective_message.text.replace("/gasto", "").strip()
     if not texto:
-        await update.message.reply_text("⚠️ Uso: `/gasto <monto> <categoría> [nota]`", parse_mode="Markdown")
+        await update.effective_message.reply_text("⚠️ Uso: `/gasto <monto> <categoría> [nota]`", parse_mode="Markdown")
         return
 
     partes = texto.split()
     if len(partes) < 2:
-        await update.message.reply_text("❌ Debes indicar al menos monto y categoría.")
+        await update.effective_message.reply_text("❌ Debes indicar al menos monto y categoría.")
         return
 
     try:
@@ -657,11 +657,11 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if monto <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ Monto inválido.")
+        await update.effective_message.reply_text("❌ Monto inválido.")
         return
 
     if len(partes) <= idx_categoria:
-        await update.message.reply_text("❌ Debes indicar la categoría después del monto.")
+        await update.effective_message.reply_text("❌ Debes indicar la categoría después del monto.")
         return
 
     categoria_input = partes[idx_categoria]
@@ -704,7 +704,7 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             metodo=metodo,
             nota=nota
         )
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ Gasto: {moneda} {monto:.2f}\n"
             f"📂 {categoria_input}\n"
             f"📝 {nota if nota else '—'}\n"
@@ -712,21 +712,21 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 {trans_id}"
         )
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error gasto: {e}")
-        await update.message.reply_text("❌ Error inesperado.")
+        await update.effective_message.reply_text("❌ Error inesperado.")
 
 @restricted
 async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.replace("/ingreso", "").strip()
+    texto = update.effective_message.text.replace("/ingreso", "").strip()
     if not texto:
-        await update.message.reply_text("⚠️ Uso: `/ingreso <monto> <categoría> [nota]`", parse_mode="Markdown")
+        await update.effective_message.reply_text("⚠️ Uso: `/ingreso <monto> <categoría> [nota]`", parse_mode="Markdown")
         return
 
     partes = texto.split()
     if len(partes) < 2:
-        await update.message.reply_text("❌ Debes indicar al menos monto y categoría.")
+        await update.effective_message.reply_text("❌ Debes indicar al menos monto y categoría.")
         return
 
     try:
@@ -745,11 +745,11 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if monto <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ Monto inválido.")
+        await update.effective_message.reply_text("❌ Monto inválido.")
         return
 
     if len(partes) <= idx_categoria:
-        await update.message.reply_text("❌ Debes indicar la categoría después del monto.")
+        await update.effective_message.reply_text("❌ Debes indicar la categoría después del monto.")
         return
 
     categoria = partes[idx_categoria]
@@ -770,24 +770,24 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
         metodo = metodo_por_tipo_cuenta(tipo_cuenta)
     try:
         trans_id = add_transaction("Ingreso", monto, moneda, categoria, "", cuenta, metodo, nota)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ Ingreso registrado: {moneda} {monto:.2f} en {categoria}\n"
             f"📝 {nota if nota else '—'}\n"
             f"🏦 Cuenta: {cuenta} ({metodo})\n"
             f"🆔 {trans_id}"
         )
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error ingreso: {e}")
-        await update.message.reply_text("❌ Error inesperado.")
+        await update.effective_message.reply_text("❌ Error inesperado.")
 
 @restricted
 async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = obtener_resumen_cuentas()
     except Exception as e:
-        await update.message.reply_text("❌ Error al obtener resumen.")
+        await update.effective_message.reply_text("❌ Error al obtener resumen.")
         logger.error(f"Error resumen: {e}")
         return
     mensaje = "📊 *Resumen de Cuentas*\n\n"
@@ -796,7 +796,7 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje += f"\n💰 *Total Activos*: PEN {data['total_activos']:,.2f}\n"
     mensaje += f"💳 *Total Pasivos (Créditos)*: PEN {data['total_pasivos']:,.2f}\n"
     mensaje += f"📈 *Patrimonio Neto*: PEN {data['patrimonio']:,.2f}"
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
 async def balance_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -816,14 +816,14 @@ async def balance_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = obtener_balance_mes(mes, año)
     except Exception as e:
-        await update.message.reply_text("❌ Error al calcular balance.")
+        await update.effective_message.reply_text("❌ Error al calcular balance.")
         logger.error(f"Error balance: {e}")
         return
     mensaje = f"📅 *Balance {mes:02d}/{año}*\n\n"
     mensaje += f"📥 Ingresos: PEN {data['ingresos']:,.2f}\n"
     mensaje += f"📤 Gastos: PEN {data['gastos']:,.2f}\n"
     mensaje += f"💵 Ahorro: PEN {data['ahorro']:,.2f}"
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
 async def reporte_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -840,54 +840,54 @@ async def reporte_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if año < 100:
                     año += 2000
         except Exception:
-            await update.message.reply_text("⚠️ Formato inválido. Usa `/reporte MM/AAAA`", parse_mode="Markdown")
+            await update.effective_message.reply_text("⚠️ Formato inválido. Usa `/reporte MM/AAAA`", parse_mode="Markdown")
             return
 
     try:
         datos = obtener_datos_reporte_mensual(mes, año)
         if datos["kpis"]["total_transacciones"] == 0:
-            await update.message.reply_text(f"ℹ️ No hay transacciones para {mes:02d}/{año}.")
+            await update.effective_message.reply_text(f"ℹ️ No hay transacciones para {mes:02d}/{año}.")
             return
 
         pdf_buffer = generar_reporte_mensual_pdf(datos)
         filename = f"reporte_finanzas_{año}_{mes:02d}.pdf"
-        await update.message.reply_document(
+        await update.effective_message.reply_document(
             document=InputFile(pdf_buffer, filename=filename),
             caption=f"📄 Cierre mensual {mes:02d}/{año} generado con gráficos y KPIs.",
         )
     except Exception as e:
         logger.error(f"Error generando reporte mensual: {e}")
-        await update.message.reply_text("❌ Error al generar el reporte PDF.")
+        await update.effective_message.reply_text("❌ Error al generar el reporte PDF.")
 
 @restricted
 async def gasto_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("⚠️ Uso: `/categoria <nombre>`", parse_mode="Markdown")
+        await update.effective_message.reply_text("⚠️ Uso: `/categoria <nombre>`", parse_mode="Markdown")
         return
     categoria = " ".join(context.args)
     try:
         data = obtener_gasto_por_categoria(categoria)
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
     except Exception as e:
-        await update.message.reply_text("❌ Error al consultar categoría.")
+        await update.effective_message.reply_text("❌ Error al consultar categoría.")
         logger.error(f"Error categoria: {e}")
         return
     mensaje = f"📊 *Gasto en {data['categoria']}*\n"
     mensaje += f"📅 {data['mes']:02d}/{data['año']}: PEN {data['total']:,.2f}"
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
 async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         deudas_activas = obtener_deudas_activas()
     except Exception as e:
-        await update.message.reply_text("❌ Error al obtener deudas.")
+        await update.effective_message.reply_text("❌ Error al obtener deudas.")
         logger.error(f"Error deudas: {e}")
         return
     if not deudas_activas:
-        await update.message.reply_text("✅ No tienes deudas activas registradas.")
+        await update.effective_message.reply_text("✅ No tienes deudas activas registradas.")
         return
     mensaje = "💳 *Deudas Activas*\n\n"
     for d in deudas_activas:
@@ -900,14 +900,14 @@ async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if d['cuenta']:
             mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
         mensaje += "\n"
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
 async def listar_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         categorias = obtener_categorias()  # lista de dicts con original, tipo, subcategorias
     except Exception as e:
-        await update.message.reply_text("❌ Error al obtener categorías.")
+        await update.effective_message.reply_text("❌ Error al obtener categorías.")
         logger.error(f"Error categorias: {e}")
         return
 
@@ -936,33 +936,33 @@ async def listar_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje += "\n\n📥 *Ingresos:*\n"
     mensaje += formatear_lista(ingresos)
 
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
 async def eliminar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("⚠️ Uso: `/eliminar <ID>`", parse_mode="Markdown")
+        await update.effective_message.reply_text("⚠️ Uso: `/eliminar <ID>`", parse_mode="Markdown")
         return
 
     trans_id = context.args[0].strip()
     try:
         data = eliminar_transaccion(trans_id)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"🗑️ Transacción eliminada\n"
             f"🆔 {data['id']}\n"
             f"📌 {data['tipo']} {data['moneda']} {data['monto']:.2f}\n"
             f"🏦 Cuenta: {data['cuenta']}"
         )
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error eliminando transacción: {e}")
-        await update.message.reply_text("❌ Error inesperado al eliminar transacción.")
+        await update.effective_message.reply_text("❌ Error inesperado al eliminar transacción.")
 
 @restricted
 async def editar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/editar <ID> <campo> <valor>`\n"
             "Campos: monto, moneda, categoria, subcategoria, cuenta, metodo, nota, fecha",
             parse_mode="Markdown"
@@ -982,17 +982,17 @@ async def editar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if data.get("deuda_id"):
             mensaje += f"\n💳 Deuda asociada: {data['deuda_id']}"
-        await update.message.reply_text(mensaje)
+        await update.effective_message.reply_text(mensaje)
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error editando transacción: {e}")
-        await update.message.reply_text("❌ Error inesperado al editar transacción.")
+        await update.effective_message.reply_text("❌ Error inesperado al editar transacción.")
 
 @restricted
 async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/pagar <deuda_id> <monto> <cuenta_banco> [nota]`\n"
             "Ejemplo: `/pagar 1 250 BCP pago quincena`",
             parse_mode="Markdown"
@@ -1005,7 +1005,7 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if monto <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ Monto inválido.")
+        await update.effective_message.reply_text("❌ Monto inválido.")
         return
 
     cuenta_banco = context.args[2].strip()
@@ -1019,7 +1019,7 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cuenta_banco=cuenta_banco,
             nota=nota,
         )
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ Pago de deuda registrado\n"
             f"🆔 Deuda: {data['deuda_id']}\n"
             f"💸 Pago: {data['moneda_deuda']} {data['pagado']:.2f}\n"
@@ -1030,10 +1030,10 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🧾 TX: {data['trans_id']}"
         )
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error pagando deuda: {e}")
-        await update.message.reply_text("❌ Error inesperado al registrar el pago de deuda.")
+        await update.effective_message.reply_text("❌ Error inesperado al registrar el pago de deuda.")
 
 def _texto_estado_deuda(dias_restantes: int) -> str:
     if dias_restantes < 0:
@@ -1138,17 +1138,17 @@ async def renovar_watch_gmail_periodico(context: ContextTypes.DEFAULT_TYPE):
 async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = iniciar_watch_gmail(force=True)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "📡 Gmail Push activado\n"
             f"HistoryId: {data.get('historyId', '—')}\n"
             f"Expiration: {data.get('expiration', '—')}\n"
             f"Topic: {config.GMAIL_PUSH_TOPIC_NAME}"
         )
     except GmailPushError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error en /gmail_watch: {e}")
-        await update.message.reply_text("❌ Error inesperado al activar Gmail Push.")
+        await update.effective_message.reply_text("❌ Error inesperado al activar Gmail Push.")
 
 
 @restricted
@@ -1166,7 +1166,7 @@ async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Bot mode: {config.BOT_MODE}\n"
         f"• Webhook URL: {config.FULL_WEBHOOK_URL or '—'}"
     )
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
 async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1174,11 +1174,11 @@ async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         recordatorios = obtener_recordatorios_deudas(dias_alerta=7)
     except Exception as e:
         logger.error(f"Error consultando recordatorios manuales: {e}")
-        await update.message.reply_text("❌ Error al consultar recordatorios.")
+        await update.effective_message.reply_text("❌ Error al consultar recordatorios.")
         return
 
     if not recordatorios:
-        await update.message.reply_text("✅ No hay deudas por vencer en los próximos 7 días.")
+        await update.effective_message.reply_text("✅ No hay deudas por vencer en los próximos 7 días.")
         return
 
     lineas = ["⏰ *Recordatorios de Deudas (manual)*"]
@@ -1197,13 +1197,13 @@ async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"  Vencimiento: {r['vencimiento']} - {estado}"
         )
 
-    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="Markdown")
 
 
 @restricted
 async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 4:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/pendiente <tipo> <monto> <cuenta> <descripcion>`\n"
             "Ejemplo: `/pendiente ingreso 1500 BCP transferencia cliente X`",
             parse_mode="Markdown",
@@ -1224,12 +1224,12 @@ async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
             fuente="ManualTelegram",
             moneda="PEN",
         )
-        await update.message.reply_text(f"📝 Pendiente registrado: {pend_id}")
+        await update.effective_message.reply_text(f"📝 Pendiente registrado: {pend_id}")
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error registrando pendiente: {e}")
-        await update.message.reply_text("❌ Error inesperado registrando pendiente.")
+        await update.effective_message.reply_text("❌ Error inesperado registrando pendiente.")
 
 
 @restricted
@@ -1245,11 +1245,11 @@ async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TY
         pendientes = listar_movimientos_pendientes(limit=limit)
     except Exception as e:
         logger.error(f"Error listando pendientes: {e}")
-        await update.message.reply_text("❌ Error al listar pendientes.")
+        await update.effective_message.reply_text("❌ Error al listar pendientes.")
         return
 
     if not pendientes:
-        await update.message.reply_text("✅ No hay movimientos pendientes.")
+        await update.effective_message.reply_text("✅ No hay movimientos pendientes.")
         return
 
     lineas = ["📥 *Movimientos pendientes*"]
@@ -1261,13 +1261,13 @@ async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TY
             f"  Desc: {p.get('Descripcion', '')}"
         )
 
-    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+    await update.effective_message.reply_text("\n".join(lineas), parse_mode="Markdown")
 
 
 @restricted
 async def confirmar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/confirmar_pendiente <ID> <categoria> [nota]`\n"
             "Ejemplo: `/confirmar_pendiente MP00001 Sueldo confirmado por correo`",
             parse_mode="Markdown",
@@ -1280,23 +1280,23 @@ async def confirmar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
 
     try:
         data = confirmar_movimiento_pendiente(pend_id, categoria, nota)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"✅ Pendiente confirmado\n"
             f"🆔 Pendiente: {data['pendiente_id']}\n"
             f"🧾 TX: {data['tx_id']}\n"
             f"📌 {data['tipo']} {data['moneda']} {data['monto']:.2f}"
         )
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error confirmando pendiente: {e}")
-        await update.message.reply_text("❌ Error inesperado al confirmar pendiente.")
+        await update.effective_message.reply_text("❌ Error inesperado al confirmar pendiente.")
 
 
 @restricted
 async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/descartar_pendiente <ID> [motivo]`",
             parse_mode="Markdown",
         )
@@ -1307,17 +1307,17 @@ async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
 
     try:
         data = descartar_movimiento_pendiente(pend_id, motivo)
-        await update.message.reply_text(f"🗑️ Pendiente descartado: {data['pendiente_id']}")
+        await update.effective_message.reply_text(f"🗑️ Pendiente descartado: {data['pendiente_id']}")
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error descartando pendiente: {e}")
-        await update.message.reply_text("❌ Error inesperado al descartar pendiente.")
+        await update.effective_message.reply_text("❌ Error inesperado al descartar pendiente.")
 
 @restricted
 async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/conciliar <cuenta> <saldo_real> [moneda]`\n"
             "Ejemplo: `/conciliar BCP 1234.56 PEN`",
             parse_mode="Markdown",
@@ -1331,11 +1331,11 @@ async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = conciliar_cuenta(cuenta, saldo_real, moneda)
     except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.effective_message.reply_text(f"❌ {e}")
         return
     except Exception as e:
         logger.error(f"Error en conciliación: {e}")
-        await update.message.reply_text("❌ Error inesperado en conciliación.")
+        await update.effective_message.reply_text("❌ Error inesperado en conciliación.")
         return
 
     mensaje = (
@@ -1348,7 +1348,7 @@ async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sugerencias = data.get("sugerencias", [])
     if not sugerencias:
         mensaje += "\n\n✅ Sin sugerencias pendientes para esa diferencia."
-        await update.message.reply_text(mensaje, parse_mode="Markdown")
+        await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
         return
 
     mensaje += "\n\n🧠 *Sugerencias de pendientes:*"
@@ -1357,14 +1357,14 @@ async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"\n• {s['id']} | {s['tipo']} {s['moneda']} {s['monto']:.2f}"
             f"\n  Desc: {s['descripcion']}"
         )
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 
 @restricted
 async def snapshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = generar_snapshot_saldos(origen="ManualTelegram")
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"📸 Snapshot guardado\n"
             f"🆔 {data['snapshot_id']}\n"
             f"🧮 Cuentas: {data['cuentas']}\n"
@@ -1373,7 +1373,7 @@ async def snapshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Error generando snapshot: {e}")
-        await update.message.reply_text("❌ Error al generar snapshot.")
+        await update.effective_message.reply_text("❌ Error al generar snapshot.")
 
 
 @restricted
@@ -1394,14 +1394,14 @@ async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAU
         "6. Ejecuta `/setear_gmail_token <nuevo_token_aqui>`\n\n"
         "⚠️ El bot detectará automáticamente cuando el token sea válido y reactivará Gmail Push."
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.effective_message.reply_text(msg, parse_mode="Markdown")
 
 
 @restricted
 async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para actualizar el GMAIL_REFRESH_TOKEN sin reiniciar."""
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⚠️ Uso: `/setear_gmail_token <nuevo_token>`\n\n"
             "Reemplaza `<nuevo_token>` con tu refresh token de Gmail.",
             parse_mode="Markdown",
@@ -1410,7 +1410,7 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
 
     nuevo_token = " ".join(context.args).strip()
     if len(nuevo_token) < 20:
-        await update.message.reply_text("❌ El token parece muy corto. Verifica que lo copiaste correctamente.")
+        await update.effective_message.reply_text("❌ El token parece muy corto. Verifica que lo copiaste correctamente.")
         return
 
     try:
@@ -1419,14 +1419,14 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
         # Actualizar en la configuración actual
         config.GMAIL_REFRESH_TOKEN = nuevo_token
         # Limpiar el flag de error anterior si existía (no lo tenemos ahora, pero podría reutilizarse)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "✅ Refresh token actualizado.\n"
             "El bot intentará reconectar automáticamente en la próxima notificación de Gmail.\n"
             "Si sigue fallando, verifica que el token sea válido."
         )
     except Exception as e:
         logger.error(f"Error actualizando GMAIL_REFRESH_TOKEN: {e}")
-        await update.message.reply_text(f"❌ Error al guardar el token: {e}")
+        await update.effective_message.reply_text(f"❌ Error al guardar el token: {e}")
 
 
 @restricted
@@ -1448,7 +1448,7 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         token_activo = token_sheets or token_actual
         
         if not token_activo:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "❌ *No hay refresh token configurado*\n\n"
                 "Ejecuta `/gmail_regenerate_token` para obtener uno nuevo.",
                 parse_mode="Markdown"
@@ -1468,11 +1468,11 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             msg += "💡 Tip: Estás usando el token del `.env`. Puedes actualizarlo con `/setear_gmail_token`\n"
         
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.effective_message.reply_text(msg, parse_mode="Markdown")
         
     except Exception as e:
         logger.error(f"Error en /gmail_token_info: {e}")
-        await update.message.reply_text(f"❌ Error: {e}")
+        await update.effective_message.reply_text(f"❌ Error: {e}")
 
 
 def main():

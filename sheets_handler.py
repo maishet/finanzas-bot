@@ -151,45 +151,61 @@ def _leer_values_cacheados(worksheet, cache_key):
     return _cache_set(cache_key, worksheet.get_all_values())
 
 
+def _columna_a_indice(col_str):
+    """Convierte "A" → 0, "B" → 1, "Z" → 25, "AA" → 26, "AB" → 27, etc."""
+    col_str = col_str.upper()
+    indice = 0
+    for char in col_str:
+        indice = indice * 26 + (ord(char) - ord('A') + 1)
+    return indice - 1
+
 def _leer_rango_formateado(nombre_hoja, rango):
     """Lee un rango de Sheets con FORMATTED_VALUE (valores visibles con formato regional).
-    Si googleapiclient no está disponible, usa fallback a gspread normal."""
+    Si googleapiclient no está disponible o falla, usa fallback a gspread normal."""
     
-    if not HAS_GOOGLE_API or sheets_api is None:
-        # Fallback: usar gspread sin FORMATTED_VALUE
+    # Intentar usar API de Sheets con FORMATTED_VALUE primero
+    if HAS_GOOGLE_API and sheets_api is not None:
         try:
-            ws = sheet.worksheet(nombre_hoja)
-            valores = ws.get_all_values()
-            # Parsear el rango manualmente (ej: "A2:F1000" → filas 1-999, cols 0-5)
-            if ":" in rango:
-                inicio, fin = rango.split(":")
-                col_inicio = ord(inicio[0]) - ord('A')
-                fila_inicio = int(''.join(c for c in inicio if c.isdigit())) - 1
-                
-                col_fin = ord(fin[0]) - ord('A') + 1
-                fila_fin = int(''.join(c for c in fin if c.isdigit()))
-                
-                resultado = []
-                for fila_idx in range(fila_inicio, min(fila_fin, len(valores))):
-                    if fila_idx < len(valores):
-                        fila = valores[fila_idx]
-                        resultado.append(fila[col_inicio:col_fin])
-                return resultado
-            return []
+            result = sheets_api.spreadsheets().values().get(
+                spreadsheetId=config.SPREADSHEET_ID,
+                range=f"'{nombre_hoja}'!{rango}",
+                valueRenderOption="FORMATTED_VALUE"
+            ).execute()
+            valores = result.get("values", [])
+            if valores:  # Solo retorna si hay datos
+                return valores
         except Exception as e:
-            logger.warning(f"Error leyendo rango fallback {nombre_hoja}!{rango}: {e}")
-            return []
+            logger.warning(f"API de Sheets falló para {nombre_hoja}!{rango}, usando fallback: {e}")
     
-    # Usar API de Sheets con FORMATTED_VALUE
+    # Fallback: usar gspread sin FORMATTED_VALUE
     try:
-        result = sheets_api.spreadsheets().values().get(
-            spreadsheetId=config.SPREADSHEET_ID,
-            range=f"'{nombre_hoja}'!{rango}",
-            valueRenderOption="FORMATTED_VALUE"
-        ).execute()
-        return result.get("values", [])
+        ws = sheet.worksheet(nombre_hoja)
+        valores = ws.get_all_values()
+        
+        if ":" not in rango:
+            return []
+            
+        inicio, fin = rango.split(":")
+        
+        # Extraer letras y números correctamente (maneja "AA1000" correctamente)
+        col_inicio_str = ''.join(c for c in inicio if c.isalpha())
+        fila_inicio = int(''.join(c for c in inicio if c.isdigit())) - 1
+        
+        col_fin_str = ''.join(c for c in fin if c.isalpha())
+        fila_fin = int(''.join(c for c in fin if c.isdigit()))
+        
+        col_inicio = _columna_a_indice(col_inicio_str)
+        col_fin = _columna_a_indice(col_fin_str) + 1
+        
+        resultado = []
+        for fila_idx in range(fila_inicio, min(fila_fin, len(valores))):
+            if fila_idx < len(valores):
+                fila = valores[fila_idx]
+                resultado.append(fila[col_inicio:col_fin])
+        
+        return resultado
     except Exception as e:
-        logger.warning(f"Error leyendo rango formateado {nombre_hoja}!{rango}: {e}")
+        logger.error(f"Error crítico leyendo {nombre_hoja}!{rango}: {e}")
         return []
 
 # ---------- FUNCIONES DE NORMALIZACIÓN ----------
@@ -1427,6 +1443,7 @@ def obtener_balance_mes(mes=None, año=None):
     valores_formateados = _leer_rango_formateado("Transacciones", "A2:E1000")
     
     if not valores_formateados:
+        logger.warning(f"No se encontraron valores en rango A2:E1000 de Transacciones")
         return {
             "mes": mes,
             "año": año,
@@ -1435,12 +1452,15 @@ def obtener_balance_mes(mes=None, año=None):
             "ahorro": 0.0,
         }
 
+    logger.info(f"Leyendo {len(valores_formateados)} filas de Transacciones para {mes:02d}/{año}")
+    
     ingresos = 0.0
     gastos = 0.0
+    filas_procesadas = 0
     
     # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda
     for fila in valores_formateados:
-        if not fila or len(fila) < 5:
+        if not fila or len(fila) < 4:  # Mínimo: Fecha, Tipo, Descripción, Monto
             continue
             
         try:
@@ -1458,11 +1478,16 @@ def obtener_balance_mes(mes=None, año=None):
 
                 if tipo == "ingreso":
                     ingresos += monto_pen
+                    filas_procesadas += 1
                 elif tipo == "gasto":
                     gastos += monto_pen
-        except (IndexError, ValueError):
+                    filas_procesadas += 1
+        except (IndexError, ValueError) as e:
+            logger.debug(f"Error al procesar fila de balance: {e}, fila: {fila}")
             continue
 
+    logger.info(f"Balance {mes:02d}/{año}: {filas_procesadas} filas procesadas, Ingresos={ingresos}, Gastos={gastos}")
+    
     ahorro = ingresos - gastos
     return {
         "mes": mes,
