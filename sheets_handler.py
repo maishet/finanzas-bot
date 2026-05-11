@@ -151,6 +151,16 @@ def _leer_values_cacheados(worksheet, cache_key):
     return _cache_set(cache_key, worksheet.get_all_values())
 
 
+def _leer_registros_cacheados_formateado(nombre_hoja, cache_key):
+    """Lee registros de una hoja con FORMATTED_VALUE y cachea el resultado."""
+    valor = _cache_get(cache_key)
+    if valor is not None:
+        return valor
+    # Leer directamente de Sheets con FORMATTED_VALUE
+    registros = _leer_registros_formateado(nombre_hoja)
+    return _cache_set(cache_key, registros)
+
+
 def _columna_a_indice(col_str):
     """Convierte "A" → 0, "B" → 1, "Z" → 25, "AA" → 26, "AB" → 27, etc."""
     col_str = col_str.upper()
@@ -206,6 +216,41 @@ def _leer_rango_formateado(nombre_hoja, rango):
         return resultado
     except Exception as e:
         logger.error(f"Error crítico leyendo {nombre_hoja}!{rango}: {e}")
+        return []
+
+
+def _leer_registros_formateado(nombre_hoja):
+    """Lee TODOS los registros de una hoja con FORMATTED_VALUE (preserva formato regional de números).
+    Retorna lista de dicts con keys del encabezado (fila 1)."""
+    try:
+        # Leer cabecera (fila 1) sin FORMATTED_VALUE (no debe tener números)
+        headers_raw = sheet.worksheet(nombre_hoja).row_values(1)
+        if not headers_raw:
+            return []
+        
+        # Leer todos los datos (desde fila 2) con FORMATTED_VALUE
+        valores_formateados = _leer_rango_formateado(nombre_hoja, f"A2:Z1000")
+        
+        resultado = []
+        for idx, fila in enumerate(valores_formateados, start=2):
+            if not fila or not any(fila):  # Saltear filas vacías
+                continue
+            
+            # Crear dict mapeando headers con valores
+            registro = {}
+            for i, header in enumerate(headers_raw):
+                if i < len(fila):
+                    registro[header] = str(fila[i]).strip() if fila[i] else ""
+                else:
+                    registro[header] = ""
+            
+            # Solo agregar si hay al menos un valor significativo
+            if any(registro.values()):
+                resultado.append(registro)
+        
+        return resultado
+    except Exception as e:
+        logger.error(f"Error en _leer_registros_formateado({nombre_hoja}): {e}")
         return []
 
 # ---------- FUNCIONES DE NORMALIZACIÓN ----------
@@ -857,33 +902,14 @@ def detectar_cuenta_en_texto(texto):
 def obtener_deudas_con_fila():
     """Lee deudas de Sheets con FORMATTED_VALUE para evitar truncamiento de números."""
     try:
-        # Leer rango completo A2:I1000 con FORMATTED_VALUE de una sola lectura
-        filas = _leer_rango_formateado("Deudas", "A2:I1000")
+        # Usar función que lee con FORMATTED_VALUE y retorna dicts
+        deudas = _leer_registros_formateado("Deudas")
         
         resultado = []
-        for idx, fila in enumerate(filas, start=2):
-            # Saltear filas vacías
-            if not fila or not str(fila[0]).strip():
-                continue
-            
-            # Asegurar que la fila tiene 9 columnas (A-I)
-            if len(fila) < 9:
-                fila = fila + [""] * (9 - len(fila))
-            
-            # Mapear columnas: A=ID(0), B=Descripcion(1), C=Tipo(2), D=MontoTotal(3), E=Moneda(4), F=MontoPagado(5), G=FechaVencimiento(6), H=Estado(7), I=CuentaAsociada(8)
-            registro = {
-                "ID": str(fila[0]).strip(),
-                "Descripcion": str(fila[1]).strip(),
-                "Tipo": str(fila[2]).strip(),
-                "MontoTotal": str(fila[3]).strip(),  # FORMATTED_VALUE preserva "79,90" no "7990"
-                "Moneda": str(fila[4]).strip(),
-                "MontoPagado": str(fila[5]).strip(),
-                "FechaVencimiento": str(fila[6]).strip(),
-                "Estado": str(fila[7]).strip(),
-                "CuentaAsociada": str(fila[8]).strip(),
-                "_row": idx,
-            }
-            resultado.append(registro)
+        for idx, d in enumerate(deudas, start=2):
+            # Agregar _row para poder actualizar después
+            d["_row"] = idx
+            resultado.append(d)
         
         return resultado
     except Exception as e:
