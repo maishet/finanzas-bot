@@ -855,12 +855,43 @@ def detectar_cuenta_en_texto(texto):
 
 # ---------- DEUDAS ----------
 def obtener_deudas_con_fila():
-    deudas = _leer_records_cacheados(deudas_ws, "deudas_records")
-    resultado = []
-    for i, d in enumerate(deudas, start=2):
-        d["_row"] = i
-        resultado.append(d)
-    return resultado
+    """Lee deudas de Sheets con FORMATTED_VALUE para evitar truncamiento de números."""
+    try:
+        # Leer directamente de Sheets con FORMATTED_VALUE (columnas A-I)
+        filas = _leer_rango_formateado("Deudas", "A2:I1000")
+        
+        resultado = []
+        for idx, fila in enumerate(filas, start=2):
+            # Asegurar que la fila tiene suficientes columnas
+            if len(fila) < 9:
+                # Rellenar con strings vacíos si faltan columnas
+                fila = fila + [""] * (9 - len(fila))
+            
+            # Mapear columnas: A=ID, B=Descripcion, C=Tipo, D=MontoTotal, E=Moneda, F=MontoPagado, G=FechaVencimiento, H=Estado, I=CuentaAsociada
+            registro = {
+                "ID": fila[0],
+                "Descripcion": fila[1],
+                "Tipo": fila[2],
+                "MontoTotal": fila[3],  # Aquí viene con FORMATTED_VALUE (3326,51 no 3.33)
+                "Moneda": fila[4],
+                "MontoPagado": fila[5],
+                "FechaVencimiento": fila[6],
+                "Estado": fila[7],
+                "CuentaAsociada": fila[8],
+                "_row": idx,  # Número de fila para actualizar después
+            }
+            resultado.append(registro)
+        
+        return resultado
+    except Exception as e:
+        logger.error(f"Error en obtener_deudas_con_fila: {e}")
+        # Fallback al cache si falla la lectura directa
+        deudas = _leer_records_cacheados(deudas_ws, "deudas_records")
+        resultado = []
+        for i, d in enumerate(deudas, start=2):
+            d["_row"] = i
+            resultado.append(d)
+        return resultado
 
 def sincronizar_estado_deudas(fecha_referencia=None):
     """Actualiza Estado según vencimiento y pendiente."""
