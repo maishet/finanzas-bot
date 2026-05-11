@@ -857,27 +857,36 @@ def detectar_cuenta_en_texto(texto):
 def obtener_deudas_con_fila():
     """Lee deudas de Sheets con FORMATTED_VALUE para evitar truncamiento de números."""
     try:
-        # Leer directamente de Sheets con FORMATTED_VALUE (columnas A-I)
-        filas = _leer_rango_formateado("Deudas", "A2:I1000")
+        # Leer directamente de Sheets con FORMATTED_VALUE (columnas B-I, sin ID)
+        # El rango B2:I1000 contiene: Descripcion, Tipo, MontoTotal, Moneda, MontoPagado, FechaVencimiento, Estado, CuentaAsociada
+        filas_sin_id = _leer_rango_formateado("Deudas", "B2:I1000")
+        
+        # Leer solo la columna A (ID) para incluirla
+        ids_col = _leer_rango_formateado("Deudas", "A2:A1000")
         
         resultado = []
-        for idx, fila in enumerate(filas, start=2):
-            # Asegurar que la fila tiene suficientes columnas
-            if len(fila) < 9:
-                # Rellenar con strings vacíos si faltan columnas
-                fila = fila + [""] * (9 - len(fila))
+        for idx, (fila_sin_id, id_val) in enumerate(zip(filas_sin_id, ids_col), start=2):
+            if not id_val or not str(id_val[0]).strip():
+                continue
+                
+            # Asegurar que la fila tiene suficientes columnas (8 columnas sin ID)
+            if len(fila_sin_id) < 8:
+                fila_sin_id = fila_sin_id + [""] * (8 - len(fila_sin_id))
             
-            # Mapear columnas: A=ID, B=Descripcion, C=Tipo, D=MontoTotal, E=Moneda, F=MontoPagado, G=FechaVencimiento, H=Estado, I=CuentaAsociada
+            # DEBUG: Log de lectura
+            logger.info(f"DEBUG deudas_con_fila - Fila {idx}: ID={id_val[0]}, MontoTotal_raw={repr(fila_sin_id[2])}")
+            
+            # Mapear columnas: (sin ID) B=Descripcion, C=Tipo, D=MontoTotal, E=Moneda, F=MontoPagado, G=FechaVencimiento, H=Estado, I=CuentaAsociada
             registro = {
-                "ID": fila[0],
-                "Descripcion": fila[1],
-                "Tipo": fila[2],
-                "MontoTotal": fila[3],  # Aquí viene con FORMATTED_VALUE (3326,51 no 3.33)
-                "Moneda": fila[4],
-                "MontoPagado": fila[5],
-                "FechaVencimiento": fila[6],
-                "Estado": fila[7],
-                "CuentaAsociada": fila[8],
+                "ID": str(id_val[0]).strip(),
+                "Descripcion": fila_sin_id[0],      # B
+                "Tipo": fila_sin_id[1],              # C
+                "MontoTotal": fila_sin_id[2],        # D - Aquí viene con FORMATTED_VALUE
+                "Moneda": fila_sin_id[3],            # E
+                "MontoPagado": fila_sin_id[4],       # F
+                "FechaVencimiento": fila_sin_id[5],  # G
+                "Estado": fila_sin_id[6],            # H
+                "CuentaAsociada": fila_sin_id[7],    # I
                 "_row": idx,  # Número de fila para actualizar después
             }
             resultado.append(registro)
@@ -1588,9 +1597,10 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
 def obtener_deudas_activas():
     """Lista deudas (tarjetas) con saldo pendiente > 0 o estado 'Activa'"""
     sincronizar_estado_deudas()
-    deudas = _leer_records_cacheados(deudas_ws, "deudas_records")
+    # Usar obtener_deudas_con_fila() que lee con FORMATTED_VALUE
+    deudas = obtener_deudas_con_fila()
     activas = []
-    for i, d in enumerate(deudas, start=2):
+    for d in deudas:
         if normalizar_texto(d.get("Estado", "")) != "activa":
             continue
         monto_total = parsear_numero(d.get("MontoTotal", 0))
