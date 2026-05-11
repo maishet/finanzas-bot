@@ -7,7 +7,14 @@ import re
 import config
 import logging
 from gspread.exceptions import WorksheetNotFound
-from googleapiclient.discovery import build
+
+# Intentar importar googleapiclient para FORMATTED_VALUE, pero no es obligatorio
+try:
+    from googleapiclient.discovery import build
+    HAS_GOOGLE_API = True
+except ImportError:
+    HAS_GOOGLE_API = False
+    build = None
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -19,8 +26,10 @@ try:
     creds = Credentials.from_service_account_file(config.GOOGLE_CREDENTIALS_FILE, scopes=SCOPES)
     client = gspread.authorize(creds)
     sheet = client.open_by_key(config.SPREADSHEET_ID)
-    # API de Sheets para lecturas con FORMATTED_VALUE
-    sheets_api = build("sheets", "v4", credentials=creds)
+    # API de Sheets para lecturas con FORMATTED_VALUE (solo si está disponible)
+    sheets_api = None
+    if HAS_GOOGLE_API:
+        sheets_api = build("sheets", "v4", credentials=creds)
     logger.info("Conexión a Google Sheets exitosa.")
 except Exception as e:
     logger.error(f"Error al conectar con Google Sheets: {e}")
@@ -143,7 +152,35 @@ def _leer_values_cacheados(worksheet, cache_key):
 
 
 def _leer_rango_formateado(nombre_hoja, rango):
-    """Lee un rango de Sheets con FORMATTED_VALUE (valores visibles con formato regional)."""
+    """Lee un rango de Sheets con FORMATTED_VALUE (valores visibles con formato regional).
+    Si googleapiclient no está disponible, usa fallback a gspread normal."""
+    
+    if not HAS_GOOGLE_API or sheets_api is None:
+        # Fallback: usar gspread sin FORMATTED_VALUE
+        try:
+            ws = sheet.worksheet(nombre_hoja)
+            valores = ws.get_all_values()
+            # Parsear el rango manualmente (ej: "A2:F1000" → filas 1-999, cols 0-5)
+            if ":" in rango:
+                inicio, fin = rango.split(":")
+                col_inicio = ord(inicio[0]) - ord('A')
+                fila_inicio = int(''.join(c for c in inicio if c.isdigit())) - 1
+                
+                col_fin = ord(fin[0]) - ord('A') + 1
+                fila_fin = int(''.join(c for c in fin if c.isdigit()))
+                
+                resultado = []
+                for fila_idx in range(fila_inicio, min(fila_fin, len(valores))):
+                    if fila_idx < len(valores):
+                        fila = valores[fila_idx]
+                        resultado.append(fila[col_inicio:col_fin])
+                return resultado
+            return []
+        except Exception as e:
+            logger.warning(f"Error leyendo rango fallback {nombre_hoja}!{rango}: {e}")
+            return []
+    
+    # Usar API de Sheets con FORMATTED_VALUE
     try:
         result = sheets_api.spreadsheets().values().get(
             spreadsheetId=config.SPREADSHEET_ID,
