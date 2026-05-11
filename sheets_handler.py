@@ -7,6 +7,7 @@ import re
 import config
 import logging
 from gspread.exceptions import WorksheetNotFound
+from googleapiclient.discovery import build
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +19,8 @@ try:
     creds = Credentials.from_service_account_file(config.GOOGLE_CREDENTIALS_FILE, scopes=SCOPES)
     client = gspread.authorize(creds)
     sheet = client.open_by_key(config.SPREADSHEET_ID)
+    # API de Sheets para lecturas con FORMATTED_VALUE
+    sheets_api = build("sheets", "v4", credentials=creds)
     logger.info("Conexión a Google Sheets exitosa.")
 except Exception as e:
     logger.error(f"Error al conectar con Google Sheets: {e}")
@@ -137,6 +140,20 @@ def _leer_values_cacheados(worksheet, cache_key):
     if valor is not None:
         return valor
     return _cache_set(cache_key, worksheet.get_all_values())
+
+
+def _leer_rango_formateado(nombre_hoja, rango):
+    """Lee un rango de Sheets con FORMATTED_VALUE (valores visibles con formato regional)."""
+    try:
+        result = sheets_api.spreadsheets().values().get(
+            spreadsheetId=config.SPREADSHEET_ID,
+            range=f"'{nombre_hoja}'!{rango}",
+            valueRenderOption="FORMATTED_VALUE"
+        ).execute()
+        return result.get("values", [])
+    except Exception as e:
+        logger.warning(f"Error leyendo rango formateado {nombre_hoja}!{rango}: {e}")
+        return []
 
 # ---------- FUNCIONES DE NORMALIZACIÓN ----------
 def normalizar_texto(texto):
@@ -1369,8 +1386,10 @@ def obtener_balance_mes(mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    valores = _leer_values_cacheados(trans_ws, "transacciones_values")
-    if not valores or len(valores) <= 1:
+    # Leer valores con FORMATTED_VALUE para evitar truncamiento de montos
+    valores_formateados = _leer_rango_formateado("Transacciones", "A2:E1000")
+    
+    if not valores_formateados:
         return {
             "mes": mes,
             "año": año,
@@ -1379,26 +1398,33 @@ def obtener_balance_mes(mes=None, año=None):
             "ahorro": 0.0,
         }
 
-    headers = valores[0]
-    transacciones = [dict(zip(headers, fila)) for fila in valores[1:] if any(str(c).strip() for c in fila)]
-
     ingresos = 0.0
     gastos = 0.0
-    for t in transacciones:
-        fecha = parsear_fecha(_valor_campo(t, "Fecha", default=""))
-        if not fecha:
+    
+    # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda
+    for fila in valores_formateados:
+        if not fila or len(fila) < 5:
             continue
+            
+        try:
+            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")
+            if not fecha:
+                continue
 
-        if fecha.year == año and fecha.month == mes:
-            monto = parsear_numero(_valor_campo(t, "Monto", default=0))
-            moneda = str(_valor_campo(t, "Moneda", default="PEN")).upper()
-            monto_pen = convertir_a_pen(monto, moneda)
+            if fecha.year == año and fecha.month == mes:
+                tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")
+                monto_str = fila[3] if len(fila) > 3 else "0"
+                moneda = str(fila[4] if len(fila) > 4 else "PEN").upper()
+                
+                monto = parsear_numero(monto_str)
+                monto_pen = convertir_a_pen(monto, moneda)
 
-            tipo = normalizar_texto(_valor_campo(t, "Tipo", default=""))
-            if tipo == "ingreso":
-                ingresos += monto_pen
-            elif tipo == "gasto":
-                gastos += monto_pen
+                if tipo == "ingreso":
+                    ingresos += monto_pen
+                elif tipo == "gasto":
+                    gastos += monto_pen
+        except (IndexError, ValueError):
+            continue
 
     ahorro = ingresos - gastos
     return {
@@ -1418,8 +1444,10 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    valores = _leer_values_cacheados(trans_ws, "transacciones_values")
-    if not valores or len(valores) <= 1:
+    # Leer valores con FORMATTED_VALUE para evitar truncamiento de montos
+    valores_formateados = _leer_rango_formateado("Transacciones", "A2:E1000")
+    
+    if not valores_formateados:
         return {
             "categoria": categoria_original,
             "mes": mes,
@@ -1427,27 +1455,36 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
             "total": 0.0,
         }
 
-    headers = valores[0]
-    transacciones = [dict(zip(headers, fila)) for fila in valores[1:] if any(str(c).strip() for c in fila)]
-
     total = 0.0
-    for t in transacciones:
-        tipo = normalizar_texto(_valor_campo(t, "Tipo", default=""))
-        if tipo != "gasto":
+    
+    # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda
+    # Necesitamos también Categoría, que probablemente está en columna F
+    valores_con_cat = _leer_rango_formateado("Transacciones", "A2:F1000")
+    
+    for fila in valores_con_cat:
+        if not fila or len(fila) < 6:
             continue
+            
+        try:
+            tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")
+            if tipo != "gasto":
+                continue
 
-        categoria_registro = str(_valor_campo(t, "Categoría", "Categoria", default="")).strip()
-        if categoria_registro != categoria_original:
+            categoria_registro = str(fila[5] if len(fila) > 5 else "").strip()
+            if categoria_registro != categoria_original:
+                continue
+
+            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")
+            if not fecha:
+                continue
+
+            if fecha.year == año and fecha.month == mes:
+                monto_str = fila[3] if len(fila) > 3 else "0"
+                moneda = str(fila[4] if len(fila) > 4 else "PEN").upper()
+                monto = parsear_numero(monto_str)
+                total += convertir_a_pen(monto, moneda)
+        except (IndexError, ValueError):
             continue
-
-        fecha = parsear_fecha(_valor_campo(t, "Fecha", default=""))
-        if not fecha:
-            continue
-
-        if fecha.year == año and fecha.month == mes:
-            monto = parsear_numero(_valor_campo(t, "Monto", default=0))
-            moneda = str(_valor_campo(t, "Moneda", default="PEN")).upper()
-            total += convertir_a_pen(monto, moneda)
 
     return {
         "categoria": categoria_original,
@@ -1545,6 +1582,14 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
 
     snapshot_id = _siguiente_id_snapshot()
     cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    
+    # Leer SaldoActual con FORMATTED_VALUE para evitar truncamiento
+    saldos_formateados = _leer_rango_formateado("Cuentas", "F2:F100")
+    saldos_dict = {}
+    for idx, fila in enumerate(saldos_formateados):
+        if fila:
+            saldos_dict[idx + 2] = fila[0] if fila else "0"
+    
     filas = []
     total_pen = 0.0
 
@@ -1553,7 +1598,10 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
         tipo = str(c.get("Tipo", "")).strip()
         moneda = str(c.get("Moneda", "PEN")).strip().upper() or "PEN"
 
-        saldo = round(parsear_numero(c.get("SaldoActual", 0)), 2)
+        # Usar valor formateado si está disponible, sino usar del diccionario
+        saldo_valor = saldos_dict.get(i) or c.get("SaldoActual", 0)
+        saldo = round(parsear_numero(saldo_valor), 2)
+        
         try:
             saldo_pen = round(convertir_a_pen(saldo, moneda), 2)
         except ValueError:
@@ -1594,9 +1642,10 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    # Usar valores formateados para respetar configuración regional de la hoja.
-    valores = _leer_values_cacheados(trans_ws, "transacciones_values")
-    if not valores or len(valores) <= 1:
+    # Leer con FORMATTED_VALUE para evitar truncamiento
+    valores = _leer_rango_formateado("Transacciones", "A2:H1000")
+    
+    if not valores:
         return {
             "mes": mes,
             "año": año,
@@ -1614,39 +1663,45 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
             "movimientos": [],
         }
 
-    headers = valores[0]
-    transacciones = [dict(zip(headers, fila)) for fila in valores[1:] if any(str(c).strip() for c in fila)]
     movimientos = []
-
-    for t in transacciones:
-        fecha_raw = _valor_campo(t, "Fecha", default="")
-        fecha_dt = parsear_fecha(fecha_raw)
-        if not fecha_dt:
+    
+    # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda, Categoría, Cuenta, Nota
+    for fila in valores:
+        if not fila or len(fila) < 4:
             continue
-        if fecha_dt.year != año or fecha_dt.month != mes:
+            
+        try:
+            fecha_raw = fila[0] if len(fila) > 0 else ""
+            fecha_dt = parsear_fecha(fecha_raw)
+            if not fecha_dt:
+                continue
+            if fecha_dt.year != año or fecha_dt.month != mes:
+                continue
+
+            tipo = str(fila[1] if len(fila) > 1 else "").strip().capitalize()
+            monto_str = fila[3] if len(fila) > 3 else "0"
+            moneda = str(fila[4] if len(fila) > 4 else "PEN").upper()
+            monto = parsear_numero(monto_str)
+            monto_pen = convertir_a_pen(monto, moneda)
+
+            categoria = str(fila[5] if len(fila) > 5 else "Sin categoría").strip() or "Sin categoría"
+            cuenta = str(fila[6] if len(fila) > 6 else "Sin cuenta").strip() or "Sin cuenta"
+            nota = str(fila[7] if len(fila) > 7 else "").strip()
+            tx_id = str(fila[2] if len(fila) > 2 else "").strip()  # ID o Descripción
+
+            movimientos.append({
+                "id": tx_id,
+                "fecha": fecha_dt,
+                "tipo": tipo,
+                "monto": monto,
+                "moneda": moneda,
+                "monto_pen": monto_pen,
+                "categoria": categoria,
+                "cuenta": cuenta,
+                "nota": nota,
+            })
+        except (IndexError, ValueError):
             continue
-
-        tipo = str(_valor_campo(t, "Tipo", default="")).strip().capitalize()
-        monto = parsear_numero(_valor_campo(t, "Monto", default=0))
-        moneda = str(_valor_campo(t, "Moneda", default="PEN")).upper()
-        monto_pen = convertir_a_pen(monto, moneda)
-
-        categoria = str(_valor_campo(t, "Categoría", "Categoria", default="Sin categoría")).strip() or "Sin categoría"
-        cuenta = str(_valor_campo(t, "Cuenta", default="Sin cuenta")).strip() or "Sin cuenta"
-        nota = str(_valor_campo(t, "Nota", default="")).strip()
-        tx_id = str(_valor_campo(t, "ID", default="")).strip()
-
-        movimientos.append({
-            "id": tx_id,
-            "fecha": fecha_dt,
-            "tipo": tipo,
-            "monto": monto,
-            "moneda": moneda,
-            "monto_pen": monto_pen,
-            "categoria": categoria,
-            "cuenta": cuenta,
-            "nota": nota,
-        })
 
     ingresos = sum(m["monto_pen"] for m in movimientos if normalizar_texto(m["tipo"]) == "ingreso")
     gastos = sum(m["monto_pen"] for m in movimientos if normalizar_texto(m["tipo"]) == "gasto")
