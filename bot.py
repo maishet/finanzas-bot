@@ -186,7 +186,10 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /snapshot - Guarda snapshot manual de saldos\n\n"
         "📬 GMAIL PUSH\n"
         "• /gmail_watch - Crea o renueva el watch de Gmail Push\n"
-        "• /gmail_estado - Muestra el estado actual del watch\n\n"
+        "• /gmail_estado - Muestra el estado actual del watch\n"
+        "• /gmail_token_info - Muestra info del refresh token\n"
+        "• /gmail_regenerate_token - Guía para regenerar token si expiró\n"
+        "• /setear_gmail_token <token> - Actualiza el refresh token\n\n"
         "🎙️ VOZ\n"
         "• Envía una nota de voz con el comando en lenguaje natural.\n"
         "• El bot transcribe, interpreta y te pedirá confirmar antes de registrar.\n"
@@ -1426,6 +1429,52 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"❌ Error al guardar el token: {e}")
 
 
+@restricted
+async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra información del refresh token de Gmail."""
+    try:
+        # Intentar obtener info del token
+        token_actual = config.GMAIL_REFRESH_TOKEN or ""
+        token_sheets = ""
+        
+        try:
+            from sheets_handler import obtener_estado_gmail_push
+            token_sheets = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN") or ""
+        except Exception:
+            pass
+        
+        # Determinar cuál se está usando
+        usando_sheets = bool(token_sheets)
+        token_activo = token_sheets or token_actual
+        
+        if not token_activo:
+            await update.message.reply_text(
+                "❌ *No hay refresh token configurado*\n\n"
+                "Ejecuta `/gmail_regenerate_token` para obtener uno nuevo.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Mostrar estado
+        msg = "📮 *Estado del Refresh Token de Gmail*\n\n"
+        msg += "✅ Token configurado\n"
+        msg += f"📍 Origen: {'Sheets (actualizado)' if usando_sheets else 'Config (.env)'}\n"
+        msg += f"🔑 Token: `{token_activo[:20]}...{token_activo[-10:]}`\n"
+        msg += f"📧 Email: {config.GMAIL_USER_EMAIL or '—'}\n"
+        msg += f"📡 Push habilitado: {'Sí' if config.GMAIL_PUSH_ENABLED else 'No'}\n\n"
+        
+        if usando_sheets:
+            msg += "💡 Tip: Estás usando el token guardado en Sheets (desde `/setear_gmail_token`)\n"
+        else:
+            msg += "💡 Tip: Estás usando el token del `.env`. Puedes actualizarlo con `/setear_gmail_token`\n"
+        
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        
+    except Exception as e:
+        logger.error(f"Error en /gmail_token_info: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
 def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -1450,6 +1499,7 @@ def main():
     app.add_handler(CommandHandler("gmail_estado", gmail_estado_cmd))
     app.add_handler(CommandHandler("gmail_regenerate_token", gmail_regenerate_token_cmd))
     app.add_handler(CommandHandler("setear_gmail_token", setear_gmail_token_cmd))
+    app.add_handler(CommandHandler("gmail_token_info", gmail_token_info_cmd))
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
