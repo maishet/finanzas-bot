@@ -29,7 +29,7 @@ from sheets_handler import (obtener_categorias,
     generar_snapshot_saldos,
     registrar_movimiento_pendiente, listar_movimientos_pendientes,
     confirmar_movimiento_pendiente, descartar_movimiento_pendiente,
-    conciliar_cuenta
+    conciliar_cuenta, guardar_estado_gmail_push
 )
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
@@ -1373,6 +1373,59 @@ async def snapshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error al generar snapshot.")
 
 
+@restricted
+async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para regenerar el refresh token de Gmail si expiró o fue revocado."""
+    msg = (
+        "🔄 *Regenerar Refresh Token de Gmail*\n\n"
+        "Si tu refresh token expiró o fue revocado (error `invalid_grant`), puedes regenerarlo:\n\n"
+        "*Opción 1: Modo local (si ejecutas el bot localmente):*\n"
+        "`python generate_gmail_refresh_token.py`\n"
+        "Luego actualiza `GMAIL_REFRESH_TOKEN` en `.env`\n\n"
+        "*Opción 2: Desde Render/servidor:*\n"
+        "1. Accede a Google Cloud Console\n"
+        "2. Ve a OAuth 2.0 Playground: https://developers.google.com/oauthplayground\n"
+        "3. Usa tu GMAIL_CLIENT_ID y GMAIL_CLIENT_SECRET\n"
+        "4. Autoriza para Gmail API scope\n"
+        "5. Copia el refresh token resultante\n"
+        "6. Ejecuta `/setear_gmail_token <nuevo_token_aqui>`\n\n"
+        "⚠️ El bot detectará automáticamente cuando el token sea válido y reactivará Gmail Push."
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+@restricted
+async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para actualizar el GMAIL_REFRESH_TOKEN sin reiniciar."""
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Uso: `/setear_gmail_token <nuevo_token>`\n\n"
+            "Reemplaza `<nuevo_token>` con tu refresh token de Gmail.",
+            parse_mode="Markdown",
+        )
+        return
+
+    nuevo_token = " ".join(context.args).strip()
+    if len(nuevo_token) < 20:
+        await update.message.reply_text("❌ El token parece muy corto. Verifica que lo copiaste correctamente.")
+        return
+
+    try:
+        # Guardar el nuevo token en Sheets bajo clave "GMAIL_REFRESH_TOKEN"
+        guardar_estado_gmail_push(GMAIL_REFRESH_TOKEN=nuevo_token)
+        # Actualizar en la configuración actual
+        config.GMAIL_REFRESH_TOKEN = nuevo_token
+        # Limpiar el flag de error anterior si existía (no lo tenemos ahora, pero podría reutilizarse)
+        await update.message.reply_text(
+            "✅ Refresh token actualizado.\n"
+            "El bot intentará reconectar automáticamente en la próxima notificación de Gmail.\n"
+            "Si sigue fallando, verifica que el token sea válido."
+        )
+    except Exception as e:
+        logger.error(f"Error actualizando GMAIL_REFRESH_TOKEN: {e}")
+        await update.message.reply_text(f"❌ Error al guardar el token: {e}")
+
+
 def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -1395,6 +1448,8 @@ def main():
     app.add_handler(CommandHandler("conciliar", conciliar_cmd))
     app.add_handler(CommandHandler("gmail_watch", gmail_watch_cmd))
     app.add_handler(CommandHandler("gmail_estado", gmail_estado_cmd))
+    app.add_handler(CommandHandler("gmail_regenerate_token", gmail_regenerate_token_cmd))
+    app.add_handler(CommandHandler("setear_gmail_token", setear_gmail_token_cmd))
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))

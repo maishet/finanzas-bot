@@ -19,14 +19,15 @@ def _load_dotenv_file(path):
         os.environ.setdefault(key.strip(), value.strip())
 
 
-def main():
+def generar_refresh_token():
+    """Ejecuta el flujo OAuth y devuelve el refresh token."""
     _load_dotenv_file(Path(".env"))
 
     client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
 
     if not client_id or not client_secret:
-        raise SystemExit(
+        raise ValueError(
             "Faltan GMAIL_CLIENT_ID o GMAIL_CLIENT_SECRET. Configuralos en .env antes de ejecutar este script."
         )
 
@@ -51,13 +52,21 @@ def main():
     )
 
     if not creds.refresh_token:
-        raise SystemExit(
+        raise ValueError(
             "Google no devolvió refresh token. Repite el flujo y asegúrate de usar prompt=consent y que el usuario no haya autorizado antes sin 'offline access'."
         )
 
-    print("\n=== REFRESH TOKEN ===")
-    print(creds.refresh_token)
-    print("\nCopia ese valor a GMAIL_REFRESH_TOKEN en tu .env")
+    return creds.refresh_token
+
+
+def main():
+    try:
+        refresh_token = generar_refresh_token()
+        print("\n=== REFRESH TOKEN ===")
+        print(refresh_token)
+        print("\nCopia ese valor a GMAIL_REFRESH_TOKEN en tu .env")
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
 
 
 if __name__ == "__main__":
