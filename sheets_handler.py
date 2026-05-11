@@ -1440,10 +1440,11 @@ def obtener_balance_mes(mes=None, año=None):
         año = ahora.year
 
     # Leer valores con FORMATTED_VALUE para evitar truncamiento de montos
-    valores_formateados = _leer_rango_formateado("Transacciones", "A2:E1000")
+    # Rango: B2:E1000 = Fecha, Tipo, Monto, Moneda (sin ID)
+    valores_formateados = _leer_rango_formateado("Transacciones", "B2:E1000")
     
     if not valores_formateados:
-        logger.warning(f"No se encontraron valores en rango A2:E1000 de Transacciones")
+        logger.warning(f"No se encontraron valores en rango B2:E1000 de Transacciones")
         return {
             "mes": mes,
             "año": año,
@@ -1458,20 +1459,20 @@ def obtener_balance_mes(mes=None, año=None):
     gastos = 0.0
     filas_procesadas = 0
     
-    # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda
+    # Encabezados esperados: Fecha(B), Tipo(C), Monto(D), Moneda(E)
     for fila in valores_formateados:
-        if not fila or len(fila) < 4:  # Mínimo: Fecha, Tipo, Descripción, Monto
+        if not fila or len(fila) < 4:  # Mínimo: Fecha, Tipo, Monto, Moneda
             continue
             
         try:
-            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")
+            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")  # Columna B
             if not fecha:
                 continue
 
             if fecha.year == año and fecha.month == mes:
-                tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")
-                monto_str = fila[3] if len(fila) > 3 else "0"
-                moneda = str(fila[4] if len(fila) > 4 else "PEN").upper()
+                tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")  # Columna C
+                monto_str = fila[2] if len(fila) > 2 else "0"  # Columna D
+                moneda = str(fila[3] if len(fila) > 3 else "PEN").upper()  # Columna E
                 
                 monto = parsear_numero(monto_str)
                 monto_pen = convertir_a_pen(monto, moneda)
@@ -1507,9 +1508,10 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
         año = ahora.year
 
     # Leer valores con FORMATTED_VALUE para evitar truncamiento de montos
-    valores_formateados = _leer_rango_formateado("Transacciones", "A2:E1000")
+    # Rango: B2:F1000 = Fecha, Tipo, Monto, Moneda, Categoría (sin ID)
+    valores_con_cat = _leer_rango_formateado("Transacciones", "B2:F1000")
     
-    if not valores_formateados:
+    if not valores_con_cat:
         return {
             "categoria": categoria_original,
             "mes": mes,
@@ -1519,30 +1521,27 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
 
     total = 0.0
     
-    # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda
-    # Necesitamos también Categoría, que probablemente está en columna F
-    valores_con_cat = _leer_rango_formateado("Transacciones", "A2:F1000")
-    
+    # Encabezados: Fecha(B), Tipo(C), Monto(D), Moneda(E), Categoría(F)
     for fila in valores_con_cat:
-        if not fila or len(fila) < 6:
+        if not fila or len(fila) < 5:
             continue
             
         try:
-            tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")
+            tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")  # Columna C
             if tipo != "gasto":
                 continue
 
-            categoria_registro = str(fila[5] if len(fila) > 5 else "").strip()
+            categoria_registro = str(fila[4] if len(fila) > 4 else "").strip()  # Columna F
             if categoria_registro != categoria_original:
                 continue
 
-            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")
+            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")  # Columna B
             if not fecha:
                 continue
 
             if fecha.year == año and fecha.month == mes:
-                monto_str = fila[3] if len(fila) > 3 else "0"
-                moneda = str(fila[4] if len(fila) > 4 else "PEN").upper()
+                monto_str = fila[2] if len(fila) > 2 else "0"  # Columna D
+                moneda = str(fila[3] if len(fila) > 3 else "PEN").upper()  # Columna E
                 monto = parsear_numero(monto_str)
                 total += convertir_a_pen(monto, moneda)
         except (IndexError, ValueError):
@@ -1705,7 +1704,8 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         año = ahora.year
 
     # Leer con FORMATTED_VALUE para evitar truncamiento
-    valores = _leer_rango_formateado("Transacciones", "A2:H1000")
+    # Rango: B2:H1000 = Fecha, Tipo, Monto, Moneda, Categoría, Cuenta, Nota (sin ID)
+    valores = _leer_rango_formateado("Transacciones", "B2:H1000")
     
     if not valores:
         return {
@@ -1727,29 +1727,29 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
 
     movimientos = []
     
-    # Encabezados esperados: Fecha, Tipo, Descripción, Monto, Moneda, Categoría, Cuenta, Nota
+    # Encabezados: Fecha(B), Tipo(C), Monto(D), Moneda(E), Categoría(F), Cuenta(G), Nota(H)
     for fila in valores:
         if not fila or len(fila) < 4:
             continue
             
         try:
-            fecha_raw = fila[0] if len(fila) > 0 else ""
+            fecha_raw = fila[0] if len(fila) > 0 else ""  # Columna B
             fecha_dt = parsear_fecha(fecha_raw)
             if not fecha_dt:
                 continue
             if fecha_dt.year != año or fecha_dt.month != mes:
                 continue
 
-            tipo = str(fila[1] if len(fila) > 1 else "").strip().capitalize()
-            monto_str = fila[3] if len(fila) > 3 else "0"
-            moneda = str(fila[4] if len(fila) > 4 else "PEN").upper()
+            tipo = str(fila[1] if len(fila) > 1 else "").strip().capitalize()  # Columna C
+            monto_str = fila[2] if len(fila) > 2 else "0"  # Columna D
+            moneda = str(fila[3] if len(fila) > 3 else "PEN").upper()  # Columna E
             monto = parsear_numero(monto_str)
             monto_pen = convertir_a_pen(monto, moneda)
 
-            categoria = str(fila[5] if len(fila) > 5 else "Sin categoría").strip() or "Sin categoría"
-            cuenta = str(fila[6] if len(fila) > 6 else "Sin cuenta").strip() or "Sin cuenta"
-            nota = str(fila[7] if len(fila) > 7 else "").strip()
-            tx_id = str(fila[2] if len(fila) > 2 else "").strip()  # ID o Descripción
+            categoria = str(fila[4] if len(fila) > 4 else "Sin categoría").strip() or "Sin categoría"  # Columna F
+            cuenta = str(fila[5] if len(fila) > 5 else "Sin cuenta").strip() or "Sin cuenta"  # Columna G
+            nota = str(fila[6] if len(fila) > 6 else "").strip()  # Columna H
+            tx_id = fecha_dt.strftime("%Y%m%d") + "-" + tipo[:1]  # ID generado a partir de fecha y tipo
 
             movimientos.append({
                 "id": tx_id,
