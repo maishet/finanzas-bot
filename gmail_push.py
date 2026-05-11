@@ -310,14 +310,33 @@ def _extraer_monto(texto):
     return round(candidatos[0][1], 2)
 
 
-def _detectar_cuenta(texto, nombres_cuentas):
+def _detectar_cuenta(texto, nombres_cuentas, modo_estricto=False):
+    """Detecta cuenta en el texto.
+    
+    Args:
+        texto: Texto del email
+        nombres_cuentas: Lista de nombres de cuenta válidos
+        modo_estricto: Si True (Gmail Push), solo acepta últimos 4 dígitos.
+                      Si False (Manual), también busca nombre de cuenta.
+    
+    Returns:
+        Nombre de cuenta si encuentra con confianza, "" si no.
+    """
     texto_norm = normalizar_texto(texto)
+    
+    # PRIORIDAD 1: Buscar últimos 4 dígitos (MÁS CONFIABLE)
     ultimos4 = re.findall(r"(?<!\d)(\d{4})(?!\d)", texto or "")
     for suf in ultimos4:
         cuenta_obj = detectar_cuenta_por_ultimos_digitos(suf)
         if cuenta_obj and cuenta_obj.get("Nombre"):
             return cuenta_obj["Nombre"]
-
+    
+    # Si modo estricto (Gmail Push), SOLO acepta últimos 4 dígitos
+    # No adivinar por nombre de cuenta
+    if modo_estricto:
+        return ""
+    
+    # PRIORIDAD 2: Buscar nombre de cuenta en el texto (MENOS CONFIABLE)
     nombres_ordenados = sorted(nombres_cuentas, key=lambda c: len(str(c or "")), reverse=True)
     for nombre in nombres_ordenados:
         nombre_norm = normalizar_texto(nombre)
@@ -370,6 +389,29 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         )
         return None
 
+    # FILTRO: Rechazar notificaciones sin valor transaccional
+    kw_notificaciones = [
+        "constancia de configuracion",
+        "aviso de seguridad",
+        "cambio de contrasena",
+        "confirmacion de identidad",
+        "verificacion de cuenta",
+        "autenticacion requerida",
+        "actualizacion de datos",
+        "cambio de datos",
+        "confirmacion de cambios",
+        "cambios realizados",
+        "configuracion realizada",
+    ]
+    texto_norm = normalizar_texto(texto)
+    if any(kw in texto_norm for kw in kw_notificaciones):
+        _log_descarte_gmail_push(
+            "notificacion_sin_valor",
+            sender=sender_email or "—",
+            subject=subject[:120] if subject else "—",
+        )
+        return None
+
     tipo = _detectar_tipo(texto)
     if not tipo:
         _log_descarte_gmail_push(
@@ -388,7 +430,7 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         )
         return None
 
-    cuenta = _detectar_cuenta(texto, obtener_nombres_cuentas())
+    cuenta = _detectar_cuenta(texto, obtener_nombres_cuentas(), modo_estricto=True)
     if not cuenta:
         _log_descarte_gmail_push(
             "cuenta_no_detectada",
