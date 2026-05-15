@@ -85,3 +85,6 @@ if WEBHOOK_BASE_URL:
     FULL_WEBHOOK_URL = f"{WEBHOOK_BASE_URL}{WEBHOOK_PATH}"
 else:
     FULL_WEBHOOK_URL = None
+
+    # Zona horaria por defecto para timestamps (usar nombre IANA, p.ej. America/Lima)
+    TIMEZONE = os.getenv("TIMEZONE", "America/Lima")

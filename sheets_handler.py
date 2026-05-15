@@ -1,6 +1,8 @@
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+from zoneinfo import ZoneInfo
+import os
 import calendar
 import unicodedata
 import re
@@ -118,14 +120,14 @@ def _cache_get(key):
     if not entry:
         return None
     timestamp, value = entry
-    if (datetime.now() - timestamp).total_seconds() > _CACHE_TTL_SECONDS:
+    if (get_now() - timestamp).total_seconds() > _CACHE_TTL_SECONDS:
         _SHEET_CACHE.pop(key, None)
         return None
     return value
 
 
 def _cache_set(key, value):
-    _SHEET_CACHE[key] = (datetime.now(), value)
+    _SHEET_CACHE[key] = (get_now(), value)
     return value
 
 
@@ -306,6 +308,28 @@ def parsear_numero(valor):
         logger.warning(f"No se pudo parsear número '{valor}'. Se usará 0.0")
         return 0.0
 
+
+def _get_tz_name():
+    # Preferir la configuración en config, luego variable de entorno
+    try:
+        return getattr(config, "TIMEZONE", os.getenv("TIMEZONE", "America/Lima"))
+    except Exception:
+        return os.getenv("TIMEZONE", "America/Lima")
+
+
+def get_now(tz_name=None):
+    """Devuelve datetime.now() con la zona horaria configurada (IANA)."""
+    name = tz_name or _get_tz_name() or "America/Lima"
+    try:
+        tz = ZoneInfo(name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz)
+
+
+def now_str(fmt="%Y-%m-%d %H:%M:%S", tz_name=None):
+    return get_now(tz_name).strftime(fmt)
+
 def parsear_fecha(valor):
     """Intenta parsear fechas en formatos frecuentes de la hoja."""
     if isinstance(valor, datetime):
@@ -333,7 +357,7 @@ def parsear_fecha(valor):
 def avanzar_un_mes(fecha_base):
     """Avanza una fecha un mes, conservando día cuando sea posible."""
     if fecha_base is None:
-        fecha_base = datetime.now()
+        fecha_base = get_now()
 
     if fecha_base.month == 12:
         nuevo_mes = 1
@@ -435,7 +459,7 @@ def registrar_movimiento_pendiente(
     pend_id = _siguiente_id_pendiente()
     fila = [
         pend_id,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        now_str(),
         fuente,
         cuenta_info["Nombre"],
         "Ingreso" if tipo_norm == "ingreso" else "Gasto",
@@ -585,7 +609,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
         )
 
     row = p["_row"]
-    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ahora = now_str()
     pend_ws.update(f"J{row}:N{row}", [["Confirmado", "", tx_id, ahora, nota_extra]], value_input_option="RAW")
     _cache_invalidate("pendientes_values")
 
@@ -608,7 +632,7 @@ def descartar_movimiento_pendiente(pendiente_id, motivo=""):
         raise ValueError(f"El pendiente '{pendiente_id}' no está en estado Pendiente.")
 
     row = p["_row"]
-    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ahora = now_str()
     pend_ws.update(f"J{row}:N{row}", [["Descartado", "", "", ahora, motivo]], value_input_option="RAW")
     _cache_invalidate("pendientes_values")
     return {"pendiente_id": str(p.get("ID", pendiente_id)).strip(), "motivo": motivo}
@@ -925,7 +949,7 @@ def obtener_deudas_con_fila():
 def sincronizar_estado_deudas(fecha_referencia=None):
     """Actualiza Estado según vencimiento y pendiente."""
     if fecha_referencia is None:
-        fecha_referencia = datetime.now()
+        fecha_referencia = get_now()
 
     for d in obtener_deudas_con_fila():
         row = d["_row"]
@@ -956,7 +980,7 @@ def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None):
         return None
 
     if fecha_transaccion is None:
-        fecha_transaccion = datetime.now()
+        fecha_transaccion = get_now()
 
     cuenta_norm = normalizar_texto(nombre_cuenta)
     candidatas = []
@@ -994,7 +1018,7 @@ def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None):
 def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=None):
     """Incrementa MontoTotal de la deuda activa asociada a una cuenta de crédito."""
     if fecha_transaccion is None:
-        fecha_transaccion = datetime.now()
+        fecha_transaccion = get_now()
 
     deuda = obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion)
     if not deuda:
@@ -1203,7 +1227,7 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
 
     # Reaplicar impacto nuevo
     nuevo_deuda_id = ""
-    fecha_nueva_dt = parsear_fecha(nuevo["fecha"]) or datetime.now()
+    fecha_nueva_dt = parsear_fecha(nuevo["fecha"]) or get_now()
     if normalizar_texto(nuevo["tipo"]) == "gasto" and es_cuenta_credito(nuevo["cuenta"]):
         nuevo_deuda_id = incrementar_deuda_por_gasto(
             nombre_cuenta=nuevo["cuenta"],
@@ -1255,15 +1279,37 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
         return False
 
     nuevo_saldo = round(nuevo_saldo, 2)
+    # Registrar en log el detalle de la operación antes de escribir en Sheets
+    logger.info(
+        "Actualizar saldo | cuenta=%s fila=F%s tipo=%s monto=%.2f PEN inicial=%.2f final=%.2f",
+        nombre_cuenta,
+        fila,
+        tipo_transaccion,
+        monto_pen,
+        saldo_actual,
+        nuevo_saldo,
+    )
+
     cuentas_ws.update(f"F{fila}", [[nuevo_saldo]], value_input_option="RAW")
     _cache_invalidate("cuentas_records")
-    logger.info(f"Saldo de '{nombre_cuenta}' actualizado: {saldo_actual} -> {nuevo_saldo}")
+    logger.debug(f"Saldo de '{nombre_cuenta}' escrito en hoja: {saldo_actual} -> {nuevo_saldo}")
     return True
 
 def obtener_saldo_actual_cuenta(nombre_cuenta):
     cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
     if not cuenta:
         return None
+    fila = cuenta.get("_row")
+    if fila:
+        try:
+            # Usar FORMATTED_VALUE para obtener el texto tal como aparece en Sheets
+            celda_saldo = cuentas_ws.acell(f"F{fila}", value_render_option="FORMATTED_VALUE").value
+            if celda_saldo is not None and str(celda_saldo).strip() != "":
+                return parsear_numero(celda_saldo)
+        except Exception:
+            # Fallback al valor cacheado si la lectura formateada falla
+            pass
+
     return parsear_numero(cuenta.get("SaldoActual", 0))
 
 # ---------- TRANSACCIONES ----------
@@ -1282,7 +1328,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     
     fecha_dt = parsear_fecha(fecha)
     if fecha_dt is None:
-        fecha_dt = datetime.now()
+        fecha_dt = get_now()
     fecha = fecha_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     # Asegura que Monto viaje como número, no como texto.
@@ -1317,7 +1363,23 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     trans_ws.append_row(nueva_fila, value_input_option="RAW")
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
     logger.info(f"Transacción {trans_id}: {tipo} {monto} {moneda} -> {categoria_original} / {subcategoria}")
-    
+
+    # Log detalle de saldo antes de aplicar la transacción
+    try:
+        saldo_inicial = obtener_saldo_actual_cuenta(cuenta_final)
+        esperado = saldo_inicial + monto_pen if tipo.lower() == "ingreso" else saldo_inicial - monto_pen
+        logger.info(
+            "Aplicar transacción | trans_id=%s cuenta=%s tipo=%s monto=%.2f PEN saldo_inicial=%.2f saldo_esperado=%.2f",
+            trans_id,
+            cuenta_final,
+            tipo,
+            monto_pen,
+            saldo_inicial or 0.0,
+            esperado,
+        )
+    except Exception:
+        logger.debug("No se pudo obtener saldo inicial para logging de transacción")
+
     actualizar_saldo_cuenta(cuenta_final, tipo, monto_pen)
     return trans_id
 
@@ -1380,6 +1442,15 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
 
     # Actualizar MontoPagado en la deuda.
     nuevo_pagado = round(monto_pagado + pago_en_moneda_deuda, 2)
+    logger.info(
+        "Pago deuda | deuda_id=%s fila=F%s pagado_actual=%.2f pago_registrado=%.2f pagado_nuevo=%.2f moneda=%s",
+        deuda_id_str,
+        row_deuda,
+        monto_pagado,
+        pago_en_moneda_deuda,
+        nuevo_pagado,
+        moneda_deuda,
+    )
     deudas_ws.update(f"F{row_deuda}", [[nuevo_pagado]], value_input_option="RAW")
     _cache_invalidate("deudas_records")
 
@@ -1390,6 +1461,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     pendiente_nuevo = round(monto_total - nuevo_pagado, 2)
     if pendiente_nuevo <= 0:
         # Marcar actual como Pagada
+        logger.info("Marcar deuda pagada | deuda_id=%s fila=H%s", deuda_id_str, row_deuda)
         deudas_ws.update(f"H{row_deuda}", [["Pagada"]], value_input_option="RAW")
         # Determinar si la deuda debe recrearse como siguiente ciclo.
         tipo_norm = normalizar_texto(deuda.get("Tipo", ""))
@@ -1409,9 +1481,16 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
                 deuda.get("Moneda", "PEN"),
                 0.00,
                 nueva_fecha_venc,
-                "Activa" if (fecha_venc_nueva and fecha_venc_nueva.date() <= datetime.now().date()) else "Programada",
+                "Activa" if (fecha_venc_nueva and fecha_venc_nueva.date() <= get_now().date()) else "Programada",
                 deuda.get("CuentaAsociada", ""),
             ]
+            logger.info(
+                "Crear nueva deuda recurrente | nueva_deuda_id=%s monto=%.2f moneda=%s cuenta_asociada=%s",
+                nueva_deuda_id,
+                round(float(monto_total), 2),
+                deuda.get("Moneda", "PEN"),
+                deuda.get("CuentaAsociada", ""),
+            )
             deudas_ws.append_row(nueva_fila, value_input_option="RAW")
             _cache_invalidate("deudas_records")
     else:
@@ -1421,7 +1500,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
 
     # Registrar transacción del pago de deuda.
     trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
-    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha = now_str()
     nota_final = f"Pago deuda {deuda_id_str}: {descripcion}"
     if nota:
         nota_final = f"{nota_final}. {nota}"
@@ -1439,6 +1518,14 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
         nota_final,
         deuda_id_str,
     ]
+    logger.info(
+        "Registrar transacción pago deuda | trans_id=%s cuenta=%s monto_registrado=%.2f moneda=%s deuda_id=%s",
+        trans_id,
+        cuenta_banco,
+        round(float(monto_pago_origen), 2),
+        (moneda_pago or "PEN").upper(),
+        deuda_id_str,
+    )
     trans_ws.append_row(fila, value_input_option="RAW")
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
 
@@ -1495,7 +1582,7 @@ def obtener_resumen_cuentas():
 def obtener_balance_mes(mes=None, año=None):
     """Calcula ingresos, gastos y ahorro de un mes específico (por defecto mes actual)"""
     if mes is None or año is None:
-        ahora = datetime.now()
+        ahora = get_now()
         mes = ahora.month
         año = ahora.year
 
@@ -1563,7 +1650,7 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
     # Validar categoría y obtener nombre original
     categoria_original = validar_categoria(categoria_input, "Gasto")
     if mes is None or año is None:
-        ahora = datetime.now()
+        ahora = get_now()
         mes = ahora.month
         año = ahora.year
 
@@ -1640,7 +1727,7 @@ def obtener_deudas_activas():
 def obtener_recordatorios_deudas(dias_alerta=3, fecha_referencia=None):
     """Retorna deudas vencidas o por vencer dentro de `dias_alerta`."""
     if fecha_referencia is None:
-        fecha_referencia = datetime.now()
+        fecha_referencia = get_now()
 
     sincronizar_estado_deudas(fecha_referencia)
     recordatorios = []
@@ -1700,7 +1787,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
     """Guarda una foto de saldos actuales por cuenta en SaldosHistoricos."""
     fecha_dt = parsear_fecha(fecha) if fecha else None
     if fecha_dt is None:
-        fecha_dt = datetime.now()
+        fecha_dt = get_now()
 
     snapshot_id = _siguiente_id_snapshot()
     cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
@@ -1772,7 +1859,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         return {
             "mes": mes,
             "año": año,
-            "generado_en": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "generado_en": now_str(),
             "kpis": {
                 "ingresos": 0.0,
                 "gastos": 0.0,
@@ -1869,7 +1956,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
     return {
         "mes": mes,
         "año": año,
-        "generado_en": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generado_en": now_str(),
         "kpis": {
             "ingresos": ingresos,
             "gastos": gastos,
