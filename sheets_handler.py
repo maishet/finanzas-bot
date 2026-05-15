@@ -143,6 +143,15 @@ def _leer_records_cacheados(worksheet, cache_key):
     valor = _cache_get(cache_key)
     if valor is not None:
         return valor
+
+    # Algunas hojas tienen montos/fechas que no deben pasar por get_all_records()
+    # porque gspread puede interpretar números usando el formato interno y no el
+    # valor visible del Excel/Sheets. Para esas hojas, usar lectura formateada.
+    if cache_key in {"cuentas_records", "transacciones_records"}:
+        hoja = getattr(worksheet, "title", "")
+        if hoja:
+            return _cache_set(cache_key, _leer_registros_formateado(hoja))
+
     return _cache_set(cache_key, worksheet.get_all_records())
 
 
@@ -219,6 +228,29 @@ def _leer_rango_formateado(nombre_hoja, rango):
     except Exception as e:
         logger.error(f"Error crítico leyendo {nombre_hoja}!{rango}: {e}")
         return []
+
+
+def _leer_celda_formateada(nombre_hoja, celda):
+    """Lee una celda individual usando FORMATTED_VALUE."""
+    if HAS_GOOGLE_API and sheets_api is not None:
+        try:
+            result = sheets_api.spreadsheets().values().get(
+                spreadsheetId=config.SPREADSHEET_ID,
+                range=f"'{nombre_hoja}'!{celda}",
+                valueRenderOption="FORMATTED_VALUE",
+            ).execute()
+            values = result.get("values", [])
+            if values and values[0]:
+                return values[0][0]
+        except Exception as e:
+            logger.warning(f"API de Sheets falló para {nombre_hoja}!{celda}: {e}")
+
+    try:
+        ws = sheet.worksheet(nombre_hoja)
+        return ws.acell(celda).value
+    except Exception as e:
+        logger.error(f"Error crítico leyendo celda {nombre_hoja}!{celda}: {e}")
+        return None
 
 
 def _leer_registros_formateado(nombre_hoja):
@@ -1269,7 +1301,12 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
         return False
 
     fila = cuenta["_row"]
-    saldo_actual = parsear_numero(cuenta.get("SaldoActual", 0))
+    saldo_cache = parsear_numero(cuenta.get("SaldoActual", 0))
+    saldo_actual = saldo_cache
+
+    celda_saldo = _leer_celda_formateada("Cuentas", f"F{fila}")
+    if celda_saldo is not None and str(celda_saldo).strip() != "":
+        saldo_actual = parsear_numero(celda_saldo)
 
     if tipo_transaccion.lower() == "ingreso":
         nuevo_saldo = saldo_actual + monto_pen
@@ -1281,13 +1318,15 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
     nuevo_saldo = round(nuevo_saldo, 2)
     # Registrar en log el detalle de la operación antes de escribir en Sheets
     logger.info(
-        "Actualizar saldo | cuenta=%s fila=F%s tipo=%s monto=%.2f PEN inicial=%.2f final=%.2f",
+        "Actualizar saldo | cuenta=%s fila=F%s tipo=%s monto=%.2f PEN inicial=%.2f final=%.2f cache=%.2f celda='%s'",
         nombre_cuenta,
         fila,
         tipo_transaccion,
         monto_pen,
         saldo_actual,
         nuevo_saldo,
+        saldo_cache,
+        celda_saldo,
     )
 
     cuentas_ws.update(f"F{fila}", [[nuevo_saldo]], value_input_option="RAW")
