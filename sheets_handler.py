@@ -1047,14 +1047,203 @@ def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None):
     candidatas.sort(key=lambda x: x.get("_fecha_venc") or datetime.max)
     return candidatas[0]
 
+
+def _obtener_periodo_por_fecha(fecha_dt, dia_corte=None):
+    """Devuelve periodo 'YYYY-MM' al que pertenece una transacción según dia_corte.
+    Si dia_corte es None, usa el mes de la fecha."""
+    if fecha_dt is None:
+        fecha_dt = get_now()
+    if dia_corte is None:
+        return fecha_dt.strftime("%Y-%m")
+    try:
+        dia_corte = int(dia_corte)
+    except Exception:
+        return fecha_dt.strftime("%Y-%m")
+
+    if fecha_dt.day > dia_corte:
+        # Pertenece al siguiente mes
+        año = fecha_dt.year + (1 if fecha_dt.month == 12 else 0)
+        mes = 1 if fecha_dt.month == 12 else fecha_dt.month + 1
+    else:
+        año = fecha_dt.year
+        mes = fecha_dt.month
+    return f"{año:04d}-{mes:02d}"
+
+
+def _obtener_dia_corte_de_cuenta(nombre_cuenta):
+    cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
+    if not cuenta:
+        return None
+    # Intentar varias variantes de nombre de columna
+    for key in ("DíaCorte", "DiaCorte", "Día Corte", "Dia Corte", "DiaCorte"):
+        val = cuenta.get(key)
+        if val:
+            try:
+                return int(str(val).strip())
+            except Exception:
+                continue
+    return None
+
+
+def _buscar_deuda_por_periodo(nombre_cuenta, periodo):
+    """Busca en Deudas una fila que coincida con CuentaAsociada y Periodo."""
+    for d in obtener_deudas_con_fila():
+        if normalizar_texto(d.get("CuentaAsociada", "")) != normalizar_texto(nombre_cuenta):
+            continue
+        if str(d.get("Periodo", "")).strip() == str(periodo):
+            return d
+    return None
+
+
+def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None, tipo="credito", moneda="PEN"):
+    """Crea una nueva fila en Deudas para el periodo indicado con montos iniciales 0."""
+    next_id = _siguiente_id_deuda()
+    deuda_id = str(next_id)
+    descripcion = descripcion or f"Deuda {nombre_cuenta} {periodo}"
+    # Construir un diccionario según headers de la hoja Deudas para mantener compatibilidad
+    headers = deudas_ws.row_values(1)
+    row_map = {h: "" for h in headers}
+    # Valores comunes
+    row_map[headers[0]] = deuda_id if headers else deuda_id
+    # Buscar campos y asignar si existen
+    def set_if_present(key, value):
+        for h in headers:
+            if normalizar_texto(h) == normalizar_texto(key):
+                row_map[h] = value
+                return True
+        return False
+
+    set_if_present("ID", deuda_id)
+    set_if_present("Descripcion", descripcion)
+    set_if_present("Tipo", tipo.capitalize())
+    set_if_present("MontoTotal", 0.00)
+    set_if_present("Moneda", moneda.upper())
+    set_if_present("MontoPagado", 0.00)
+    set_if_present("FechaVencimiento", fecha_venc.strftime("%d/%m/%Y") if fecha_venc else "")
+    set_if_present("Estado", "Activa")
+    set_if_present("CuentaAsociada", nombre_cuenta)
+    set_if_present("Periodo", periodo)
+
+    fila = [row_map.get(h, "") for h in headers]
+    deudas_ws.append_row(fila, value_input_option="RAW")
+    _cache_invalidate("deudas_records")
+    logger.info("Crear deuda ciclo | id=%s cuenta=%s periodo=%s fecha_venc=%s", deuda_id, nombre_cuenta, periodo, fecha_venc)
+    return deuda_id
+
+    """Migra la hoja Deudas para asegurar columnas Periodo/FechaCorte y asigna periodo a filas existentes.
+    También crea ciclos vacíos para el periodo actual si faltan para cuentas de crédito."""
+    headers = deudas_ws.row_values(1)
+    changed = False
+    if "Periodo" not in headers:
+        headers.append("Periodo")
+        changed = True
+    if "FechaCorte" not in headers:
+        headers.append("FechaCorte")
+        changed = True
+
+    if changed:
+        deudas_ws.update("1:1", [headers], value_input_option="RAW")
+        logger.info("Migración: añadidas columnas Periodo/FechaCorte en Deudas")
+
+    # Colocar periodo para filas existentes
+    deudas = obtener_deudas_con_fila()
+    headers = deudas_ws.row_values(1)
+    try:
+        col_periodo = headers.index("Periodo") + 1
+    except ValueError:
+        col_periodo = None
+    try:
+        col_fechacorte = headers.index("FechaCorte") + 1
+    except ValueError:
+        col_fechacorte = None
+
+    updated = 0
+    for d in deudas:
+        row = d.get("_row")
+        if not row:
+            continue
+        fecha_venc = parsear_fecha(d.get("FechaVencimiento"))
+        periodo = None
+        if fecha_venc:
+            periodo = fecha_venc.strftime("%Y-%m")
+            fecha_corte_str = fecha_venc.strftime("%d/%m/%Y")
+        else:
+            # intentar derivar periodo desde hoy y dia de corte de la cuenta
+            dia_corte = _obtener_dia_corte_de_cuenta(d.get("CuentaAsociada", ""))
+            periodo = _obtener_periodo_por_fecha(get_now(), dia_corte)
+            fecha_corte_str = ""
+
+        if col_periodo:
+            deudas_ws.update_cell(row, col_periodo, periodo)
+        if col_fechacorte:
+            deudas_ws.update_cell(row, col_fechacorte, fecha_corte_str)
+        updated += 1
+
+    logger.info("Migración: asignados Periodo/FechaCorte a %d filas de Deudas", updated)
+
+    # Crear ciclos vacíos para periodo actual en tarjetas de crédito si faltan
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    created = 0
+    for c in cuentas:
+        tipo = normalizar_texto(c.get("Tipo", ""))
+        if tipo != "credito":
+            continue
+        nombre = c.get("Nombre")
+        dia_corte = _obtener_dia_corte_de_cuenta(nombre)
+        periodo_actual = _obtener_periodo_por_fecha(get_now(), dia_corte)
+        existe = _buscar_deuda_por_periodo(nombre, periodo_actual)
+        if not existe:
+            # intentar derivar fecha_venc desde DiaPago
+            fecha_venc = None
+            for key in ("DíaPago", "DiaPago", "Dia Pago"):
+                val = c.get(key)
+                if val:
+                    try:
+                        dp = int(str(val).strip())
+                        año, mes = map(int, periodo_actual.split("-"))
+                        fecha_venc = datetime(año, mes, min(dp, 28))
+                    except Exception:
+                        fecha_venc = None
+            crear_deuda_ciclo(nombre, periodo_actual, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda=c.get("Moneda", "PEN"))
+            created += 1
+
+    logger.info("Migración: creados %d ciclos vacíos para periodo actual", created)
+    return {"asignadas": updated, "creadas": created}
+
 def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=None):
     """Incrementa MontoTotal de la deuda activa asociada a una cuenta de crédito."""
     if fecha_transaccion is None:
         fecha_transaccion = get_now()
 
-    deuda = obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion)
+    # Determinar periodo según fecha_transaccion y dia de corte de la cuenta
+    dia_corte = _obtener_dia_corte_de_cuenta(nombre_cuenta)
+    periodo = _obtener_periodo_por_fecha(fecha_transaccion, dia_corte)
+
+    # Buscar deuda por periodo
+    deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo)
     if not deuda:
-        return ""
+        # Si no existe deuda para el periodo, crearla (fecha_venc opcional)
+        # Intentar derivar FechaVenc desde DiaPago de la cuenta
+        cuenta_info = obtener_cuenta_por_nombre(nombre_cuenta)
+        fecha_venc = None
+        if cuenta_info:
+            for key in ("DíaPago", "DiaPago", "Dia Pago", "Día Pago"):
+                val = cuenta_info.get(key)
+                if val:
+                    try:
+                        dp = int(str(val).strip())
+                        # Construir fecha_venc en el mes correspondiente al periodo
+                        año, mes = map(int, periodo.split("-"))
+                        fecha_venc = datetime(año, mes, min(dp, 28))
+                    except Exception:
+                        fecha_venc = None
+        nueva_id = crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda="PEN")
+        # Refrescar cache y obtener la deuda recién creada
+        _cache_invalidate("deudas_records")
+        deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo)
+        if not deuda:
+            logger.warning("No se pudo crear deuda para periodo %s cuenta %s", periodo, nombre_cuenta)
+            return ""
 
     row = deuda["_row"]
     deuda_id = str(deuda.get("ID", "")).strip()
@@ -1064,14 +1253,29 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
 
     monto_total_actual = parsear_numero(deuda.get("MontoTotal", 0))
     nuevo_total = round(monto_total_actual + monto_convertido, 2)
-    deudas_ws.update(f"D{row}", [[nuevo_total]], value_input_option="RAW")
+    # Buscar columna MontoTotal por cabecera y actualizar la celda correcta
+    # Asumimos que MontoTotal está en la columna D si se mantiene el esquema, pero
+    # para mayor robustez, escribimos por celda calculando la letra mediante el header.
+    headers = deudas_ws.row_values(1)
+    col_idx = None
+    for idx, h in enumerate(headers, start=1):
+        if normalizar_texto(h) == normalizar_texto("MontoTotal"):
+            col_idx = idx
+            break
+    if col_idx:
+        deudas_ws.update_cell(row, col_idx, nuevo_total)
+    else:
+        # Fallback a D{row}
+        deudas_ws.update(f"D{row}", [[nuevo_total]], value_input_option="RAW")
+
     _cache_invalidate("deudas_records")
 
     logger.info(
-        "Deuda update | id=%s cuenta=%s fila=%s moneda_deuda=%s celda_raw='%s' "
+        "Deuda update | id=%s cuenta=%s periodo=%s fila=%s moneda_deuda=%s celda_raw='%s' "
         "monto_actual=%.2f gasto_origen=%.2f %s gasto_convertido=%.2f %s nuevo_total=%.2f",
         deuda_id,
         nombre_cuenta,
+        periodo,
         row,
         moneda_deuda,
         deuda.get("MontoTotal", 0),
@@ -1512,11 +1716,17 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
             next_id = _siguiente_id_deuda()
             nueva_deuda_id = str(next_id)
             nueva_fecha_venc = fecha_venc_nueva.strftime("%d/%m/%Y") if fecha_venc_nueva else ""
+            # Para servicios recurrentes, prefijar el monto del siguiente ciclo con el monto anterior.
+            if tipo_norm == "servicio" or recurrente_flag in ("si", "true", "1", "yes"):
+                monto_inicial = round(float(monto_total), 2)
+            else:
+                monto_inicial = 0.00
+
             nueva_fila = [
                 nueva_deuda_id,
                 deuda.get("Descripcion", ""),
                 deuda.get("Tipo", ""),
-                round(float(monto_total), 2),
+                monto_inicial,
                 deuda.get("Moneda", "PEN"),
                 0.00,
                 nueva_fecha_venc,
@@ -1526,16 +1736,15 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
             logger.info(
                 "Crear nueva deuda recurrente | nueva_deuda_id=%s monto=%.2f moneda=%s cuenta_asociada=%s",
                 nueva_deuda_id,
-                round(float(monto_total), 2),
+                monto_inicial,
                 deuda.get("Moneda", "PEN"),
                 deuda.get("CuentaAsociada", ""),
             )
             deudas_ws.append_row(nueva_fila, value_input_option="RAW")
             _cache_invalidate("deudas_records")
-    else:
-        # Si no se completó, actualizar la fecha de vencimiento si procede
-        deudas_ws.update(f"G{row_deuda}", [[fecha_venc_nueva.strftime("%d/%m/%Y")]], value_input_option="RAW")
-        _cache_invalidate("deudas_records")
+    # NOTE: no actualizar la fecha de vencimiento en pagos parciales.
+    # El vencimiento del ciclo se mantiene hasta que el ciclo sea marcado como Pagada
+    # y (si corresponde) se cree la nueva fila para el siguiente ciclo.
 
     # Registrar transacción del pago de deuda.
     trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
