@@ -1569,8 +1569,8 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
 def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
-    async def _configurar_comandos():
-        await app.bot.set_my_commands(
+    async def _configurar_comandos(application):
+        await application.bot.set_my_commands(
             [
                 BotCommand("start", "Iniciar el bot"),
                 BotCommand("help", "Mostrar ayuda"),
