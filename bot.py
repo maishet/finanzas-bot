@@ -7,6 +7,7 @@ from functools import wraps
 import httpx
 import tornado.web
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import BotCommand
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from telegram.ext import _updater as ptb_updater
 from telegram.ext._utils.webhookhandler import TelegramHandler
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 VOICE_PENDING_KEY = "voice_pending_payload"
 VOICE_EDITING_KEY = "voice_editing_mode"
+PENDING_CONFIRM_KEY = "pending_confirm_pending"
 VENTANAS_RECORDATORIO_DIAS = (7, 3, 1)
 
 
@@ -180,7 +182,9 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /categorias - Listado de categorías\n"
         "• /pendiente <tipo> <monto> <cuenta> <descripcion>\n"
         "• /pendientes [N] - Lista movimientos pendientes\n"
+        "• /cp <ID> <categoria> [nota]  (alias corto de confirmar)\n"
         "• /confirmar_pendiente <ID> <categoria> [nota]\n"
+        "• /dp <ID> [motivo]  (alias corto de descartar)\n"
         "• /descartar_pendiente <ID> [motivo]\n"
         "• /conciliar <cuenta> <saldo_real> [moneda]\n"
         "• /snapshot - Guarda snapshot manual de saldos\n\n"
@@ -582,6 +586,26 @@ async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def procesar_edicion_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pendiente = context.user_data.get(PENDING_CONFIRM_KEY)
+    if pendiente:
+        categoria = (update.effective_message.text or "").strip()
+        if not categoria:
+            await update.effective_message.reply_text("⚠️ Escribe una categoría para confirmar el pendiente.")
+            return
+
+        pend_id = str(pendiente.get("id", "")).strip()
+        nota = str(pendiente.get("nota", "")).strip()
+        context.user_data.pop(PENDING_CONFIRM_KEY, None)
+
+        try:
+            await _confirmar_pendiente_con_categoria(update, context, pend_id, categoria, nota)
+        except ValueError as e:
+            await update.effective_message.reply_text(f"❌ {e}")
+        except Exception as e:
+            logger.error(f"Error confirmando pendiente con categoría: {e}")
+            await update.effective_message.reply_text("❌ Error inesperado al confirmar pendiente.")
+        return
+
     if not context.user_data.get(VOICE_EDITING_KEY):
         return
 
@@ -627,6 +651,46 @@ async def callbacks_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             context.user_data.pop(VOICE_PENDING_KEY, None)
             context.user_data[VOICE_EDITING_KEY] = False
+
+
+@restricted
+async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = (query.data or "").strip()
+    partes = data.split(":", 2)
+    if len(partes) < 3:
+        return
+
+    accion = partes[1]
+    pend_id = partes[2].strip()
+
+    if accion == "discard":
+        try:
+            resultado = descartar_movimiento_pendiente(pend_id, "Descartado desde botón")
+            context.user_data.pop(PENDING_CONFIRM_KEY, None)
+            await query.edit_message_text(f"🗑️ Pendiente descartado: {resultado['pendiente_id']}")
+        except ValueError as e:
+            await query.edit_message_text(f"❌ {e}")
+        except Exception as e:
+            logger.error(f"Error descartando pendiente desde botón: {e}")
+            await query.edit_message_text("❌ Error inesperado al descartar pendiente.")
+        return
+
+    if accion == "confirm":
+        context.user_data[PENDING_CONFIRM_KEY] = {"id": pend_id, "nota": ""}
+        sugerencias = []
+        try:
+            sugerencias = [cat.get("original", "") for cat in obtener_categorias("Gasto")[:5]]
+        except Exception:
+            sugerencias = []
+
+        texto = f"✍️ Escribe la categoría para confirmar el pendiente {pend_id}."
+        if sugerencias:
+            texto += "\nSugerencias: " + ", ".join([s for s in sugerencias if s])
+        await query.edit_message_text(texto)
+        return
 
 @restricted
 async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1253,6 +1317,7 @@ async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     lineas = ["📥 *Movimientos pendientes*"]
+    keyboard = []
     for p in pendientes:
         monto = parsear_numero(p.get("Monto", 0))
         lineas.append(
@@ -1260,8 +1325,16 @@ async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TY
             f"  Cuenta: {p.get('Cuenta', '')}\n"
             f"  Desc: {p.get('Descripcion', '')}"
         )
+        keyboard.append([
+            InlineKeyboardButton(f"✅ {p.get('ID', '')}", callback_data=f"pend:confirm:{p.get('ID', '')}"),
+            InlineKeyboardButton(f"🗑️ {p.get('ID', '')}", callback_data=f"pend:discard:{p.get('ID', '')}"),
+        ])
 
-    await update.effective_message.reply_text("\n".join(lineas), parse_mode="Markdown")
+    await update.effective_message.reply_text(
+        "\n".join(lineas),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 @restricted
@@ -1293,6 +1366,20 @@ async def confirmar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
         await update.effective_message.reply_text("❌ Error inesperado al confirmar pendiente.")
 
 
+async def confirmar_pendiente_short_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await confirmar_pendiente_cmd(update, context)
+
+
+async def _confirmar_pendiente_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, pend_id: str, categoria: str, nota: str = ""):
+    data = confirmar_movimiento_pendiente(pend_id, categoria, nota)
+    await update.effective_message.reply_text(
+        f"✅ Pendiente confirmado\n"
+        f"🆔 Pendiente: {data['pendiente_id']}\n"
+        f"🧾 TX: {data['tx_id']}\n"
+        f"📌 {data['tipo']} {data['moneda']} {data['monto']:.2f}"
+    )
+
+
 @restricted
 async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -1313,6 +1400,10 @@ async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         logger.error(f"Error descartando pendiente: {e}")
         await update.effective_message.reply_text("❌ Error inesperado al descartar pendiente.")
+
+
+async def descartar_pendiente_short_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await descartar_pendiente_cmd(update, context)
 
 @restricted
 async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1477,6 +1568,35 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
+
+    async def _configurar_comandos():
+        await app.bot.set_my_commands(
+            [
+                BotCommand("start", "Iniciar el bot"),
+                BotCommand("help", "Mostrar ayuda"),
+                BotCommand("ayuda", "Mostrar ayuda en español"),
+                BotCommand("gasto", "Registrar un gasto"),
+                BotCommand("ingreso", "Registrar un ingreso"),
+                BotCommand("resumen", "Ver resumen"),
+                BotCommand("mes", "Balance del mes"),
+                BotCommand("reporte", "Reporte del mes"),
+                BotCommand("categoria", "Gasto por categoría"),
+                BotCommand("categorias", "Listar categorías"),
+                BotCommand("deudas", "Ver deudas"),
+                BotCommand("pagar", "Pagar una deuda"),
+                BotCommand("pagar_deuda", "Pagar una deuda"),
+                BotCommand("pendiente", "Registrar pendiente"),
+                BotCommand("pendientes", "Listar pendientes"),
+                BotCommand("cp", "Confirmar pendiente"),
+                BotCommand("confirmar_pendiente", "Confirmar pendiente"),
+                BotCommand("dp", "Descartar pendiente"),
+                BotCommand("descartar_pendiente", "Descartar pendiente"),
+                BotCommand("conciliar", "Conciliar una cuenta"),
+                BotCommand("snapshot", "Guardar snapshot de saldos"),
+            ]
+        )
+
+    app.post_init = _configurar_comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", ayuda))
     app.add_handler(CommandHandler("ayuda", ayuda))
@@ -1493,7 +1613,9 @@ def main():
     app.add_handler(CommandHandler("pendiente", registrar_pendiente_cmd))
     app.add_handler(CommandHandler("pendientes", listar_pendientes_cmd))
     app.add_handler(CommandHandler("confirmar_pendiente", confirmar_pendiente_cmd))
+    app.add_handler(CommandHandler("cp", confirmar_pendiente_short_cmd))
     app.add_handler(CommandHandler("descartar_pendiente", descartar_pendiente_cmd))
+    app.add_handler(CommandHandler("dp", descartar_pendiente_short_cmd))
     app.add_handler(CommandHandler("conciliar", conciliar_cmd))
     app.add_handler(CommandHandler("gmail_watch", gmail_watch_cmd))
     app.add_handler(CommandHandler("gmail_estado", gmail_estado_cmd))
@@ -1503,6 +1625,7 @@ def main():
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
+    app.add_handler(CallbackQueryHandler(callbacks_pendientes, pattern=r"^pend:"))
     app.add_handler(CallbackQueryHandler(callbacks_voz, pattern=r"^voice:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, procesar_nota_voz))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_edicion_voz))
