@@ -19,7 +19,7 @@ from gmail_push import (
     obtener_estado_gmail_push_resumido,
     GmailPushError,
 )
-from sheets_handler import (obtener_categorias,
+from airtable_handler import (obtener_categorias,
     add_transaction, obtener_nombres_cuentas,
     obtener_resumen_cuentas, obtener_balance_mes,
     obtener_gasto_por_categoria, obtener_deudas_activas,
@@ -1472,18 +1472,19 @@ async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAU
     """Comando para regenerar el refresh token de Gmail si expiró o fue revocado."""
     msg = (
         "🔄 *Regenerar Refresh Token de Gmail*\n\n"
-        "Si tu refresh token expiró o fue revocado (error `invalid_grant`), puedes regenerarlo:\n\n"
-        "*Opción 1: Modo local (si ejecutas el bot localmente):*\n"
-        "`python generate_gmail_refresh_token.py`\n"
-        "Luego actualiza `GMAIL_REFRESH_TOKEN` en `.env`\n\n"
-        "*Opción 2: Desde Render/servidor:*\n"
-        "1. Accede a Google Cloud Console\n"
-        "2. Ve a OAuth 2.0 Playground: https://developers.google.com/oauthplayground\n"
-        "3. Usa tu GMAIL_CLIENT_ID y GMAIL_CLIENT_SECRET\n"
-        "4. Autoriza para Gmail API scope\n"
-        "5. Copia el refresh token resultante\n"
-        "6. Ejecuta `/setear_gmail_token <nuevo_token_aqui>`\n\n"
-        "⚠️ El bot detectará automáticamente cuando el token sea válido y reactivará Gmail Push."
+        "Si aparece `invalid_grant`, el refresh token fue revocado/expiró.\n\n"
+        "⚠️ *Importante:* si el token te dura ~7 días, tu app OAuth está en modo *Testing*. "
+        "Cámbiala a *Production* en Google Cloud Console (OAuth consent screen) para evitar renovaciones semanales.\n\n"
+        "*Paso único recomendado (para no repetir cada semana):*\n"
+        "1. Google Cloud Console → OAuth consent screen → Publishing status: *Production*\n"
+        "2. Regenera 1 vez el refresh token\n"
+        "3. Ejecuta `/setear_gmail_token <nuevo_token_aqui>`\n\n"
+        "*Opción local para regenerar token:*\n"
+        "`python generate_gmail_refresh_token.py`\n\n"
+        "*Opción sin entorno local (OAuth Playground):*\n"
+        "https://developers.google.com/oauthplayground\n\n"
+        "✅ El bot usa refresh automático del access token en cada llamada. "
+        "No deberías volver a cambiar el refresh token manualmente salvo revocación o cambio de credenciales."
     )
     await update.effective_message.reply_text(msg, parse_mode="Markdown")
 
@@ -1505,7 +1506,7 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     try:
-        # Guardar el nuevo token en Sheets bajo clave "GMAIL_REFRESH_TOKEN"
+        # Guardar el nuevo token en Airtable bajo clave "GMAIL_REFRESH_TOKEN"
         guardar_estado_gmail_push(GMAIL_REFRESH_TOKEN=nuevo_token)
         # Actualizar en la configuración actual
         config.GMAIL_REFRESH_TOKEN = nuevo_token
@@ -1529,7 +1530,7 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         token_sheets = ""
         
         try:
-            from sheets_handler import obtener_estado_gmail_push
+            from airtable_handler import obtener_estado_gmail_push
             token_sheets = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN") or ""
         except Exception:
             pass
@@ -1549,13 +1550,13 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         # Mostrar estado
         msg = "📮 *Estado del Refresh Token de Gmail*\n\n"
         msg += "✅ Token configurado\n"
-        msg += f"📍 Origen: {'Sheets (actualizado)' if usando_sheets else 'Config (.env)'}\n"
+        msg += f"📍 Origen: {'Airtable (actualizado)' if usando_sheets else 'Config (.env)'}\n"
         msg += f"🔑 Token: `{token_activo[:20]}...{token_activo[-10:]}`\n"
         msg += f"📧 Email: {config.GMAIL_USER_EMAIL or '—'}\n"
         msg += f"📡 Push habilitado: {'Sí' if config.GMAIL_PUSH_ENABLED else 'No'}\n\n"
         
         if usando_sheets:
-            msg += "💡 Tip: Estás usando el token guardado en Sheets (desde `/setear_gmail_token`)\n"
+            msg += "💡 Tip: Estás usando el token guardado en Airtable (desde `/setear_gmail_token`)\n"
         else:
             msg += "💡 Tip: Estás usando el token del `.env`. Puedes actualizarlo con `/setear_gmail_token`\n"
         

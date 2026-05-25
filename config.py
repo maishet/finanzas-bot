@@ -19,13 +19,14 @@ if not TELEGRAM_TOKEN:
 # ID de usuario autorizado (para restringir comandos)
 USER_ID = int(os.getenv("USER_ID", "123456789"))
 
-# ID de la hoja de cálculo de Google Sheets
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-if not SPREADSHEET_ID:
-    raise ValueError("No se encontró SPREADSHEET_ID en variables de entorno")
+# Airtable como única fuente de datos
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+if not AIRTABLE_BASE_ID:
+    raise ValueError("No se encontró AIRTABLE_BASE_ID en variables de entorno")
 
-# Archivo de credenciales de la cuenta de servicio
-GOOGLE_CREDENTIALS_FILE = "credentials.json"
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY", "").strip()
+if not AIRTABLE_API_KEY:
+    raise ValueError("No se encontró AIRTABLE_API_KEY en variables de entorno")
 
 # Moneda base
 BASE_CURRENCY = "PEN"

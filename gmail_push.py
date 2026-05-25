@@ -15,7 +15,7 @@ import config
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from sheets_handler import (
+from airtable_handler import (
     normalizar_texto,
     parsear_numero,
     obtener_nombres_cuentas,
@@ -84,16 +84,16 @@ def _remitente_permitido(sender_email):
 def _credenciales_gmail():
     global _GMAIL_AUTH_ERROR_LOGGED_AT
 
-    # Intentar cargar el token desde Sheets primero (permite actualizar sin reinicio)
+    # Intentar cargar el token desde Airtable primero (permite actualizar sin reinicio)
     refresh_token = None
     try:
         estado = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN")
         if estado:
             refresh_token = estado.strip()
     except Exception:
-        pass  # Si Sheets falla, usar el de config
+        pass  # Si Airtable falla, usar el de config
 
-    # Si no está en Sheets, usar el de config
+    # Si no está en Airtable, usar el de config
     if not refresh_token:
         refresh_token = config.GMAIL_REFRESH_TOKEN
 

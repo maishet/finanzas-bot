@@ -1,5 +1,3 @@
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
@@ -8,34 +6,12 @@ import unicodedata
 import re
 import config
 import logging
-from gspread.exceptions import WorksheetNotFound
 
-# Intentar importar googleapiclient para FORMATTED_VALUE, pero no es obligatorio
-try:
-    from googleapiclient.discovery import build
-    HAS_GOOGLE_API = True
-except ImportError:
-    HAS_GOOGLE_API = False
-    build = None
+from airtable_backend import api as airtable_api, sheet, WorksheetNotFound
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-try:
-    creds = Credentials.from_service_account_file(config.GOOGLE_CREDENTIALS_FILE, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(config.SPREADSHEET_ID)
-    # API de Sheets para lecturas con FORMATTED_VALUE (solo si está disponible)
-    sheets_api = None
-    if HAS_GOOGLE_API:
-        sheets_api = build("sheets", "v4", credentials=creds)
-    logger.info("Conexión a Google Sheets exitosa.")
-except Exception as e:
-    logger.error(f"Error al conectar con Google Sheets: {e}")
-    raise
 
 trans_ws = sheet.worksheet("Transacciones")
 cuentas_ws = sheet.worksheet("Cuentas")
@@ -144,14 +120,6 @@ def _leer_records_cacheados(worksheet, cache_key):
     if valor is not None:
         return valor
 
-    # Algunas hojas tienen montos/fechas que no deben pasar por get_all_records()
-    # porque gspread puede interpretar números usando el formato interno y no el
-    # valor visible del Excel/Sheets. Para esas hojas, usar lectura formateada.
-    if cache_key in {"cuentas_records", "transacciones_records"}:
-        hoja = getattr(worksheet, "title", "")
-        if hoja:
-            return _cache_set(cache_key, _leer_registros_formateado(hoja))
-
     return _cache_set(cache_key, worksheet.get_all_records())
 
 
@@ -167,7 +135,7 @@ def _leer_registros_cacheados_formateado(nombre_hoja, cache_key):
     valor = _cache_get(cache_key)
     if valor is not None:
         return valor
-    # Leer directamente de Sheets con FORMATTED_VALUE
+    # Leer directamente de Airtable con FORMATTED_VALUE
     registros = _leer_registros_formateado(nombre_hoja)
     return _cache_set(cache_key, registros)
 
@@ -181,49 +149,23 @@ def _columna_a_indice(col_str):
     return indice - 1
 
 def _leer_rango_formateado(nombre_hoja, rango):
-    """Lee un rango de Sheets con FORMATTED_VALUE (valores visibles con formato regional).
-    Si googleapiclient no está disponible o falla, usa fallback a gspread normal."""
-    
-    # Intentar usar API de Sheets con FORMATTED_VALUE primero
-    if HAS_GOOGLE_API and sheets_api is not None:
-        try:
-            result = sheets_api.spreadsheets().values().get(
-                spreadsheetId=config.SPREADSHEET_ID,
-                range=f"'{nombre_hoja}'!{rango}",
-                valueRenderOption="FORMATTED_VALUE"
-            ).execute()
-            valores = result.get("values", [])
-            if valores:  # Solo retorna si hay datos
-                return valores
-        except Exception as e:
-            logger.warning(f"API de Sheets falló para {nombre_hoja}!{rango}, usando fallback: {e}")
-    
-    # Fallback: usar gspread sin FORMATTED_VALUE
+    """Compatibilidad con el código existente: devuelve un rango de valores desde Airtable."""
     try:
         ws = sheet.worksheet(nombre_hoja)
         valores = ws.get_all_values()
-        
-        if ":" not in rango:
+        if not valores or ":" not in rango:
             return []
-            
         inicio, fin = rango.split(":")
-        
-        # Extraer letras y números correctamente (maneja "AA1000" correctamente)
         col_inicio_str = ''.join(c for c in inicio if c.isalpha())
         fila_inicio = int(''.join(c for c in inicio if c.isdigit())) - 1
-        
         col_fin_str = ''.join(c for c in fin if c.isalpha())
         fila_fin = int(''.join(c for c in fin if c.isdigit()))
-        
         col_inicio = _columna_a_indice(col_inicio_str)
         col_fin = _columna_a_indice(col_fin_str) + 1
-        
         resultado = []
         for fila_idx in range(fila_inicio, min(fila_fin, len(valores))):
-            if fila_idx < len(valores):
-                fila = valores[fila_idx]
-                resultado.append(fila[col_inicio:col_fin])
-        
+            fila = valores[fila_idx]
+            resultado.append(fila[col_inicio:col_fin])
         return resultado
     except Exception as e:
         logger.error(f"Error crítico leyendo {nombre_hoja}!{rango}: {e}")
@@ -231,20 +173,7 @@ def _leer_rango_formateado(nombre_hoja, rango):
 
 
 def _leer_celda_formateada(nombre_hoja, celda):
-    """Lee una celda individual usando FORMATTED_VALUE."""
-    if HAS_GOOGLE_API and sheets_api is not None:
-        try:
-            result = sheets_api.spreadsheets().values().get(
-                spreadsheetId=config.SPREADSHEET_ID,
-                range=f"'{nombre_hoja}'!{celda}",
-                valueRenderOption="FORMATTED_VALUE",
-            ).execute()
-            values = result.get("values", [])
-            if values and values[0]:
-                return values[0][0]
-        except Exception as e:
-            logger.warning(f"API de Sheets falló para {nombre_hoja}!{celda}: {e}")
-
+    """Compatibilidad con el código existente: lee una celda desde Airtable."""
     try:
         ws = sheet.worksheet(nombre_hoja)
         return ws.acell(celda).value
@@ -956,7 +885,7 @@ def detectar_cuenta_en_texto(texto):
 
 # ---------- DEUDAS ----------
 def obtener_deudas_con_fila():
-    """Lee deudas de Sheets con FORMATTED_VALUE para evitar truncamiento de números."""
+    """Lee deudas de Airtable con FORMATTED_VALUE para evitar truncamiento de números."""
     try:
         # Usar función que lee con FORMATTED_VALUE y retorna dicts
         deudas = _leer_registros_formateado("Deudas")
@@ -1520,7 +1449,7 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
         return False
 
     nuevo_saldo = round(nuevo_saldo, 2)
-    # Registrar en log el detalle de la operación antes de escribir en Sheets
+    # Registrar en log el detalle de la operación antes de escribir en Airtable
     logger.info(
         "Actualizar saldo | cuenta=%s fila=F%s tipo=%s monto=%.2f PEN inicial=%.2f final=%.2f cache=%.2f celda='%s'",
         nombre_cuenta,
@@ -1545,7 +1474,7 @@ def obtener_saldo_actual_cuenta(nombre_cuenta):
     fila = cuenta.get("_row")
     if fila:
         try:
-            # Usar FORMATTED_VALUE para obtener el texto tal como aparece en Sheets
+            # Usar FORMATTED_VALUE para obtener el texto tal como aparece en Airtable
             celda_saldo = cuentas_ws.acell(f"F{fila}", value_render_option="FORMATTED_VALUE").value
             if celda_saldo is not None and str(celda_saldo).strip() != "":
                 return parsear_numero(celda_saldo)

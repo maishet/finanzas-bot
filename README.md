@@ -1,10 +1,10 @@
 # Finanzas Bot
 
-Bot de Telegram para registrar gastos e ingresos, sincronizar movimientos con Google Sheets, controlar deudas de tarjetas de crédito, recibir recordatorios automáticos de vencimiento y detectar correos bancarios con Gmail Push.
+Bot de Telegram para registrar gastos e ingresos, sincronizar movimientos con Airtable, controlar deudas de tarjetas de crédito, recibir recordatorios automáticos de vencimiento y detectar correos bancarios con Gmail Push.
 
 ## Resumen
 
-Este proyecto permite llevar un control financiero personal desde Telegram, guardando cada transacción en una hoja de Google Sheets y actualizando automáticamente:
+Este proyecto permite llevar un control financiero personal desde Telegram, guardando cada transacción en una base de Airtable y actualizando automáticamente:
 
 - saldos de cuentas
 - deuda asociada a tarjetas de crédito
@@ -31,7 +31,7 @@ y el bot se encargue de:
 - Registro de gastos e ingresos desde Telegram.
 - Detección automática de cuenta en el texto del mensaje.
 - Soporte para cuentas de tipo `Efectivo`, `Banco`, `Crédito` y `Debito`.
-- Actualización automática de saldos en Google Sheets.
+- Actualización automática de saldos en Airtable.
 - Asociación de gastos a deudas activas mediante `DeudaID`.
 - Cálculo de deuda pendiente usando `MontoTotal`, `MontoPagado` y `FechaVencimiento`.
 - Comandos para resumen, balance mensual, categorías y deudas activas.
@@ -51,6 +51,90 @@ y el bot se encargue de:
 - Notas de voz con transcripción y confirmación antes de ejecutar.
 - Interpretación de lenguaje natural para comandos generales: resumen, reporte, mes, deudas, categorías, pago, edición y eliminación.
 - Keep-alive opcional para Render Free mediante cron-job.org.
+
+## Migración única a Airtable
+
+La aplicación usará Airtable como única fuente de datos. La migración no es un simple cambio de credenciales: implica redefinir el modelo de persistencia, adaptar la capa de acceso a datos y ajustar la importación histórica desde el XLSX exportado.
+
+### Cambios que sufrirá la aplicación
+
+- Airtable será la única base de datos operativa.
+- `airtable_handler.py` actúa como capa de acceso a Airtable.
+- La persistencia depende solo de Airtable.
+- No queda ninguna dependencia de la integración anterior.
+- Las operaciones usan `record ID` en lugar de números de fila.
+- El modelo anterior se transformó en tablas con esquema fijo.
+- La lógica de negocio vive en el código o en campos de Airtable.
+- La importación histórica y la operación diaria comparten el mismo esquema para evitar duplicados.
+
+### Lo que necesito para migrarlo completamente
+
+1. El archivo histórico exportado en `.xlsx` o `.csv`.
+2. El `Base ID` de Airtable (`app...`).
+3. Un Personal Access Token de Airtable con acceso a esa base.
+4. Confirmación de que la base destino será la fuente única.
+5. Autorización para definir el esquema final de tablas y campos.
+6. Un respaldo antes del corte final.
+
+### Esquema final propuesto para Airtable
+
+Tablas principales:
+
+- `Transacciones`
+- `Cuentas`
+- `Categorias`
+- `Deudas`
+- `MovimientosPendientes`
+- `GmailEstado`
+- `SaldosHistoricos`
+
+Relaciones y criterios:
+
+- `Transacciones.Cuenta` referencia a `Cuentas.Nombre` o a un campo de vínculo equivalente.
+- `Transacciones.DeudaID` referencia a `Deudas.ID`.
+- `Deudas.CuentaAsociada` referencia a `Cuentas.Nombre`.
+- `MovimientosPendientes.TXID` referencia a `Transacciones.ID` cuando se concilia.
+- `GmailEstado` queda como tabla de estado clave/valor para `historyId`, `watch_expiration` y valores similares.
+- `SaldosHistoricos` conserva snapshots diarios o manuales para auditoría.
+
+### Pasos de migración recomendados
+
+1. **Inventariar los datos actuales**
+   - Revisar columnas, tipos, valores repetidos y dependencias entre tablas.
+
+2. **Crear el esquema en Airtable**
+   - Definir campos, selects, referencias y claves de deduplicación.
+
+3. **Normalizar el XLSX histórico**
+   - Limpiar fechas, montos, monedas, cuentas, categorías y deudas.
+   - Ejecutar una importación única desde XLSX con un script temporal local (no versionado en el repo).
+
+4. **Importar el histórico a Airtable**
+   - Cargar en lotes y validar conteos, totales y duplicados.
+
+5. **Refactorizar la capa de persistencia**
+   - Reemplazar lecturas y escrituras por Airtable.
+   - Cambiar búsquedas por filas por búsquedas por registro.
+   - Mantener los cálculos en código cuando no existan equivalentes directos en Airtable.
+
+6. **Actualizar configuración y dependencias**
+   - Eliminar variables del modelo anterior.
+   - Agregar `AIRTABLE_BASE_ID` y `AIRTABLE_API_KEY`.
+   - Quitar dependencias ya no usadas.
+
+7. **Validar en paralelo**
+   - Comparar resultados del histórico importado con el comportamiento actual.
+
+8. **Hacer el corte definitivo**
+   - Desactivar toda referencia al sistema anterior.
+   - Usar Airtable como única fuente desde ese momento.
+
+### Riesgos y cambios operativos
+
+- Airtable tiene límites de rate y paginación.
+- No habrá edición manual en una hoja de cálculo para la lógica principal.
+- Las conciliaciones y reportes leerán exclusivamente desde Airtable.
+- Si había fórmulas de Airtable, ahora vivirán en el código o en campos derivados.
 
 ## Mejoras recientes
 
@@ -73,8 +157,8 @@ flowchart TD
 	A[Usuario en Telegram] --> B[bot.py]
 	B --> C[Parseo del comando]
 	C --> D[Detectar monto, categoría, cuenta y nota]
-	D --> E[sheets_handler.py]
-	E --> F[Google Sheets]
+	D --> E[airtable_handler.py]
+	E --> F[Airtable]
 	F --> G[Transacciones]
 	F --> H[Cuentas]
 	F --> I[Deudas]
@@ -92,7 +176,7 @@ sequenceDiagram
 	participant U as Usuario
 	participant T as Telegram
 	participant B as Bot
-	participant S as Google Sheets
+	participant S as Airtable
 
 	U->>T: /gasto 123.53 supermercado almuerzo tarjeta AMEX
 	T->>B: Mensaje
@@ -110,13 +194,13 @@ sequenceDiagram
 finanzas-bot/
 ├── .env
 ├── .gitignore
+├── airtable_backend.py
 ├── bot.py
 ├── config.py
-├── credentials.json
 ├── gmail_push.py
 ├── README.md
 ├── requirements.txt
-└── sheets_handler.py
+└── airtable_handler.py
 ```
 
 ## Archivos principales
@@ -131,9 +215,9 @@ Contiene la lógica del bot de Telegram:
 - envío de respuestas
 - recordatorios automáticos con `JobQueue`
 
-### `sheets_handler.py`
+### `airtable_handler.py`
 
-Contiene toda la lógica de negocio y acceso a Google Sheets:
+Contiene toda la lógica de negocio y acceso a Airtable:
 
 - lectura y escritura de transacciones
 - normalización de números y fechas
@@ -153,7 +237,7 @@ Contiene la integración de Gmail Push:
 - consumo de notificaciones Pub/Sub
 - lectura del historial de Gmail
 - parseo de mensajes RFC822
-- registro de pendientes en Google Sheets
+- registro de pendientes en Airtable
 
 ### `config.py`
 
@@ -161,23 +245,16 @@ Carga variables de entorno y centraliza configuración:
 
 - `TELEGRAM_TOKEN`
 - `USER_ID`
-- `SPREADSHEET_ID`
-- `GOOGLE_CREDENTIALS_FILE`
+- `AIRTABLE_BASE_ID`
+- `AIRTABLE_API_KEY`
 - `BASE_CURRENCY`
 - `EXCHANGE_RATE`
-- `VOICE_ENABLED`
 - `VOICE_LOCALE`
 - `VOICE_LANGUAGE`
 - `GROQ_API_KEY`
 - `GROQ_TRANSCRIPTION_MODEL`
 - `KEEPALIVE_ENABLED`
 - `KEEPALIVE_INTERVAL_MINUTES`
-
-### `credentials.json`
-
-Archivo JSON de la cuenta de servicio de Google.
-
-**Importante:** no debe subirse a GitHub.
 
 ### `.env`
 
@@ -188,6 +265,7 @@ Archivo local con variables sensibles del entorno.
 ### `requirements.txt`
 
 Lista de dependencias Python necesarias para el proyecto.
+
 
 ## Instalación
 
@@ -228,84 +306,26 @@ Crear un archivo `.env` con algo similar a esto:
 ```env
 TELEGRAM_TOKEN=tu_token_de_telegram
 USER_ID=123456789
-SPREADSHEET_ID=tu_id_de_google_sheets
+AIRTABLE_BASE_ID=appXXXXXXXXXXXXXX
+AIRTABLE_API_KEY=patXXXXXXXXXXXXXX
 EXCHANGE_RATE=3.44
+BASE_CURRENCY=PEN
 ```
 
-### 4. Agregar credenciales de Google
+### Acceso a Airtable
 
-Coloca el archivo `credentials.json` en la raíz del proyecto.
-
-## Cómo obtener `credentials.json` (Google Cloud Console)
-
-Este paso es obligatorio para que el bot pueda leer y escribir en Google Sheets.
-
-### 1. Crear o elegir un proyecto en Google Cloud
-
-1. Ve a Google Cloud Console.
-2. Crea un proyecto nuevo o selecciona uno existente.
-
-### 2. Habilitar APIs necesarias
-
-1. En el proyecto, entra a APIs y servicios.
-2. Habilita estas APIs:
-- Google Sheets API
-- Google Drive API
-
-### 3. Crear una cuenta de servicio
-
-1. Ve a IAM y administración > Cuentas de servicio.
-2. Crea una cuenta de servicio (ejemplo: `finanzas-bot-sa`).
-3. Finaliza la creación.
-
-### 4. Generar la clave JSON
-
-1. Abre la cuenta de servicio creada.
-2. Ve a la pestaña Claves.
-3. Agrega una nueva clave.
-4. Selecciona tipo JSON.
-5. Descarga el archivo.
-
-Renombra ese archivo a `credentials.json` y colócalo en la raíz del proyecto.
-
-### 5. Compartir tu Google Sheet con la cuenta de servicio
-
-1. Abre el archivo JSON descargado.
-2. Copia el valor de `client_email`.
-3. Ve a tu Google Sheet.
-4. Pulsa Compartir y agrega ese correo como Editor.
-
-Si no haces este paso, el bot fallará con errores de permisos aunque el JSON sea válido.
-
-### 6. Configurar el ID del Sheet
-
-1. Abre tu Google Sheet en el navegador.
-2. Copia el ID desde la URL:
-
-```text
-https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit#gid=0
-```
-
-3. Coloca ese valor en `SPREADSHEET_ID` en tu `.env`.
-
-### Seguridad recomendada
-
-1. Nunca subas `credentials.json` a GitHub.
-2. Verifica que `.gitignore` incluya `credentials.json`.
-3. En producción (Render), usa Secret File o variable segura para manejar credenciales.
+Este proyecto ya no usa la integración anterior.
+Para operar, solo necesitas el `Base ID` y un token personal de Airtable con permisos sobre la base destino.
 
 ## Dependencias
 
 Las principales librerías usadas son:
 
 - `python-telegram-bot[job-queue]` para el bot y recordatorios programados.
-- `gspread` para trabajar con Google Sheets.
-- `google-auth` para autenticación con cuenta de servicio.
 - `python-dotenv` para cargar variables del archivo `.env`.
 - `pytz` y `APScheduler` como soporte de tareas programadas.
-- `oauth2client` por compatibilidad con autenticación en Google APIs.
 - `groq` para transcripción de notas de voz.
-- `reportlab` para generación de PDFs con gráficos y KPIs.
+- `openpyxl` para leer el XLSX histórico durante la migración.
 
 ## Estado actual del proyecto
 
@@ -314,7 +334,7 @@ Las principales librerías usadas son:
 - ~~Registro de gastos e ingresos desde Telegram.~~
 - ~~Detección automática de cuenta en el texto del mensaje.~~
 - ~~Soporte para cuentas de tipo `Efectivo`, `Banco`, `Crédito` y `Debito`.~~
-- ~~Actualización automática de saldos en Google Sheets.~~
+- ~~Actualización automática de saldos en Airtable.~~
 - ~~Asociación de gastos a deudas activas mediante `DeudaID`.~~
 - ~~Cálculo de deuda pendiente usando `MontoTotal`, `MontoPagado` y `FechaVencimiento`.~~
 - ~~Comandos para resumen, balance mensual, categorías y deudas activas.~~
@@ -336,7 +356,7 @@ Las principales librerías usadas son:
 2. Mejorar el soporte de conversación guiada para edición de transacciones complejas.
 3. Incorporar gráficos históricos o comparativos por varios meses en el PDF.
 4. Evaluar un panel web liviano de consulta rápida sin salir de Telegram.
-5. Añadir alertas por errores operativos críticos en Sheets o webhook.
+5. Añadir alertas por errores operativos críticos o webhook.
 6. Reforzar métricas operativas de Gmail Push para distinguir mejor descartes, duplicados y registros nuevos.
 
 ## Comandos del bot
@@ -733,7 +753,7 @@ Matching de cuenta por correo:
 
 ### Configuración de Gmail Push en Google Cloud
 
-Este proyecto usa el mismo proyecto de Google Cloud que ya tienes para Sheets, pero Gmail Push requiere además credenciales OAuth de Gmail y Pub/Sub.
+Este proyecto usa el mismo proyecto de Google Cloud ya configurado para el bot, pero Gmail Push requiere además credenciales OAuth de Gmail y Pub/Sub.
 
 1. Entra a Google Cloud Console y selecciona el mismo proyecto del bot.
 2. Habilita estas APIs:
@@ -822,7 +842,7 @@ Cómo fluye el sistema:
 
 1. ~~Consolidar confiabilidad básica de comandos (`/gasto`, `/ingreso`, `/pagar`, `/deudas`).~~
 2. ~~Fase 2: Gmail Push + parser + deduplicación.~~
-3. ~~Añadir snapshots diarios en Google Sheets (hoja histórica simple) para auditoría.~~
+3. ~~Añadir snapshots diarios en Airtable (hoja histórica simple) para auditoría.~~
 4. ~~Añadir modo opcional de keep-alive con variable de entorno para Render Free.~~
 5. ~~Ajustar el parser de voz con frases reales del usuario para reducir ambigüedad.~~
 
@@ -832,7 +852,7 @@ Cómo fluye el sistema:
 2. ~~Recordatorios automáticos realmente confiables por cron interno.~~
 3. ~~Múltiples horarios de notificación (ejemplo: 7 días, 3 días y 1 día antes del vencimiento).~~
 4. Endpoint de healthcheck y monitoreo externo.
-5. Alertas por error operativo (fallos de Sheets, credenciales, webhook).
+5. Añadir alertas por error operativo (credenciales, webhook).
 6. Futuro panel web básico (resumen, deudas, bitácora) sin dejar Telegram.
 7. Desactivar keep-alive externo cuando ya no sea necesario.
 
@@ -853,7 +873,7 @@ El proyecto ya está preparado para manejar formatos regionales como:
 - `25,50`
 - `123.53`
 
-Esto evita errores al leer montos y saldos desde Google Sheets, especialmente si la hoja está configurada con formato latinoamericano.
+Esto evita errores al leer montos y saldos desde Airtable, especialmente si la hoja está configurada con formato latinoamericano.
 
 También aplica a comandos de Fase 1 y Fase 2 (`/pendiente`, `/pendientes`, `/conciliar`, `/gmail_watch`, `/gmail_estado`, `/snapshot`), unificando el parseo para entradas como `314,13` y `314.13`.
 
@@ -872,7 +892,7 @@ También aplica a comandos de Fase 1 y Fase 2 (`/pendiente`, `/pendientes`, `/co
 - cuenta: `AMEX`
 - método: `Tarjeta de Crédito`
 
-3. Guarda en Google Sheets:
+3. Guarda en Airtable:
 
 - fila en `Transacciones`
 - saldo actualizado en `Cuentas`
@@ -881,10 +901,10 @@ También aplica a comandos de Fase 1 y Fase 2 (`/pendiente`, `/pendientes`, `/co
 
 ## Recomendaciones
 
-- Mantén `credentials.json` y `.env` fuera del repositorio.
-- No edites manualmente montos formateados como texto en Google Sheets; deja que el bot los actualice.
-- Si cambias la estructura de las hojas, revisa también `sheets_handler.py`.
-- Si agregas nuevas cuentas, asegúrate de que el tipo sea uno de los soportados.
+- Mantén el `.env` fuera del repositorio.
+- No edites manualmente montos formateados como texto en Airtable; deja que el bot los actualice.
+- Si cambias la estructura de Airtable, revisa también `airtable_handler.py` y `airtable_backend.py`.
+
 
 ## Solución de problemas
 
