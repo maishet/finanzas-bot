@@ -2072,7 +2072,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
         filas.append(
             [
                 snapshot_id,
-                fecha_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                fecha_dt.isoformat(timespec="seconds"),
                 nombre,
                 tipo,
                 moneda,
