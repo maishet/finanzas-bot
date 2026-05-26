@@ -53,6 +53,18 @@ def _date(name: str) -> Dict[str, Any]:
     return {"name": name, "type": "date", "options": {"dateFormat": {"name": "iso", "format": "YYYY-MM-DD"}}}
 
 
+def _datetime(name: str) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "type": "dateTime",
+        "options": {
+            "dateFormat": {"name": "iso", "format": "YYYY-MM-DD"},
+            "timeFormat": {"name": "24hour", "format": "HH:mm"},
+            "timeZone": "America/Lima",
+        },
+    }
+
+
 def _single_select(name: str, choices: Iterable[str]) -> Dict[str, Any]:
     return {
         "name": name,
@@ -68,7 +80,7 @@ def _schema_headers(fields: List[Dict[str, Any]]) -> List[str]:
 DEFAULT_FIELD_DEFS = {
     "Transacciones": [
         _text("ID"),
-        _date("Fecha"),
+        _datetime("Fecha"),
         _single_select("Tipo", ["Gasto", "Ingreso"]),
         _number("Monto"),
         _single_select("Moneda", ["PEN", "USD"]),
@@ -110,7 +122,7 @@ DEFAULT_FIELD_DEFS = {
     ],
     "MovimientosPendientes": [
         _text("ID"),
-        _date("FechaDetectada"),
+        _datetime("FechaDetectada"),
         _single_select("Fuente", ["GmailPush"]),
         _single_select("Cuenta", ["Efectivo", "BCP", "AMEX"]),
         _single_select("Tipo", ["Gasto", "Ingreso"]),
@@ -121,17 +133,17 @@ DEFAULT_FIELD_DEFS = {
         _single_select("Estado", ["Confirmado", "Descartado", "Pendiente"]),
         _number("Confianza"),
         _text("TXID"),
-        _date("FechaResolucion"),
+        _datetime("FechaResolucion"),
         _multiline("Observacion"),
     ],
     "GmailEstado": [
         _text("Clave"),
         _text("Valor"),
-        _date("ActualizadoEn"),
+        _datetime("ActualizadoEn"),
     ],
     "SaldosHistoricos": [
         _text("SnapshotID"),
-        _date("FechaHora"),
+        _datetime("FechaHora"),
         _single_select("Cuenta", ["Efectivo", "BCP", "AMEX"]),
         _single_select("TipoCuenta", ["Banco", "Crédito", "Efectivo"]),
         _single_select("Moneda", ["PEN", "USD"]),

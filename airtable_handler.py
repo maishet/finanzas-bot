@@ -808,9 +808,8 @@ def guardar_estado_gmail_push(**campos):
     headers = valores[0] if valores else ["Clave", "Valor", "ActualizadoEn"]
     filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)] if len(valores) > 1 else []
     indice = {str(f.get("Clave", "")).strip(): idx for idx, f in enumerate(filas, start=2)}
-    # Airtable campo "ActualizadoEn" está definido como tipo fecha (YYYY-MM-DD)
-    # para evitar HTTP 422 por formato inválido.
-    ahora = datetime.now().strftime("%Y-%m-%d")
+    # Airtable Date/DateTime acepta mejor formato ISO 8601.
+    ahora = datetime.now().isoformat(timespec="seconds")
 
     for clave, valor in campos.items():
         clave_txt = str(clave).strip()
