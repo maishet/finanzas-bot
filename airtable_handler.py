@@ -357,20 +357,40 @@ def convertir_moneda(monto, moneda_origen, moneda_destino):
     raise ValueError(f"Conversión de moneda no soportada: {origen} -> {destino}")
 
 # ---------- FUNCIONES BÁSICAS ----------
-def obtener_siguiente_id(worksheet):
+def obtener_siguiente_id(worksheet, prefix="TX"):
+    """Devuelve el siguiente correlativo basado en el máximo ID existente, no en la última fila."""
     try:
         col_a = worksheet.col_values(1)
         if len(col_a) <= 1:
             return 1
-        ultimo_valor = col_a[-1]
-        if ultimo_valor.startswith("TX"):
-            num = int(ultimo_valor[2:])
-            return num + 1
-        else:
-            return len(col_a)
+
+        max_num = 0
+        pref = str(prefix or "").upper()
+        for raw in col_a[1:]:
+            txt = str(raw or "").strip().upper()
+            if not txt:
+                continue
+            if pref:
+                if not txt.startswith(pref):
+                    continue
+                txt = txt[len(pref):]
+            if txt.isdigit():
+                max_num = max(max_num, int(txt))
+
+        if max_num > 0:
+            return max_num + 1
+
+        # Fallback legacy: correlativo por cantidad de filas con datos
+        data_rows = sum(1 for v in col_a[1:] if str(v or "").strip())
+        return max(1, data_rows + 1)
     except Exception as e:
         logger.error(f"Error obteniendo siguiente ID: {e}")
-        return len(worksheet.col_values(1))
+        try:
+            col_a = worksheet.col_values(1)
+            data_rows = sum(1 for v in col_a[1:] if str(v or "").strip())
+            return max(1, data_rows + 1)
+        except Exception:
+            return 1
 
 def convertir_a_pen(monto, moneda):
     if moneda.upper() == "PEN":
@@ -393,16 +413,8 @@ def _metodo_por_cuenta(nombre_cuenta):
 
 
 def _siguiente_id_pendiente():
-    try:
-        col_a = pend_ws.col_values(1)
-        if len(col_a) <= 1:
-            return "MP00001"
-        ultimo = str(col_a[-1]).strip().upper()
-        if ultimo.startswith("MP"):
-            return f"MP{int(ultimo[2:]) + 1:05d}"
-        return f"MP{len(col_a):05d}"
-    except Exception:
-        return f"MP{len(pend_ws.col_values(1)):05d}"
+    next_num = obtener_siguiente_id(pend_ws, prefix="MP")
+    return f"MP{int(next_num):05d}"
 
 
 def registrar_movimiento_pendiente(
@@ -1253,17 +1265,7 @@ def obtener_deuda_por_id(deuda_id):
     return None
 
 def _siguiente_id_deuda():
-    try:
-        col_a = deudas_ws.col_values(1)
-        if len(col_a) <= 1:
-            return 1
-        ultimo = str(col_a[-1]).strip()
-        try:
-            return int(ultimo) + 1
-        except Exception:
-            return len(col_a)
-    except Exception:
-        return len(deudas_ws.col_values(1))
+    return int(obtener_siguiente_id(deudas_ws, prefix=""))
 
 def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta):
     """Ajusta MontoTotal de una deuda por ID. delta positivo suma, negativo resta."""
@@ -1972,16 +1974,8 @@ def _valor_campo(registro, *keys, default=""):
 
 
 def _siguiente_id_snapshot():
-    try:
-        col_a = snap_ws.col_values(1)
-        if len(col_a) <= 1:
-            return "SH00001"
-        ultimo = str(col_a[-1]).strip().upper()
-        if ultimo.startswith("SH"):
-            return f"SH{int(ultimo[2:]) + 1:05d}"
-        return f"SH{len(col_a):05d}"
-    except Exception:
-        return f"SH{len(snap_ws.col_values(1)):05d}"
+    next_num = obtener_siguiente_id(snap_ws, prefix="SH")
+    return f"SH{int(next_num):05d}"
 
 
 def generar_snapshot_saldos(origen="Manual", fecha=None):
