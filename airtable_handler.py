@@ -893,8 +893,8 @@ def guardar_estado_gmail_push(**campos):
     headers = valores[0] if valores else ["Clave", "Valor", "ActualizadoEn"]
     filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)] if len(valores) > 1 else []
     indice = {str(f.get("Clave", "")).strip(): idx for idx, f in enumerate(filas, start=2)}
-    # Airtable Date/DateTime acepta mejor formato ISO 8601.
-    ahora = datetime.now().isoformat(timespec="seconds")
+    # Airtable Date/DateTime acepta mejor formato ISO 8601 con zona horaria.
+    ahora = get_now().isoformat(timespec="seconds")
 
     for clave, valor in campos.items():
         clave_txt = str(clave).strip()
@@ -1583,7 +1583,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     fecha_dt = parsear_fecha(fecha)
     if fecha_dt is None:
         fecha_dt = get_now()
-    fecha = fecha_dt.strftime("%Y-%m-%d %H:%M:%S")
+    fecha = fecha_dt.isoformat(timespec="seconds")
 
     # Asegura que Monto viaje como número, no como texto.
     monto_num = round(float(monto), 2)
@@ -1760,7 +1760,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
 
     # Registrar transacción del pago de deuda.
     trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
-    fecha = now_str()
+    fecha = get_now().isoformat(timespec="seconds")
     nota_final = f"Pago deuda {deuda_id_str}: {descripcion}"
     if nota:
         nota_final = f"{nota_final}. {nota}"
