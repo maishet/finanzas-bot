@@ -142,10 +142,8 @@ def restricted(func):
 
 def metodo_por_tipo_cuenta(tipo_cuenta):
     tipo_norm = (tipo_cuenta or "").strip().lower()
-    if tipo_norm in ["credito", "crédito"]:
-        return "Tarjeta de Crédito"
-    if tipo_norm in ["debito", "débito"]:
-        return "Tarjeta de Débito"
+    if tipo_norm in ["credito", "crédito", "debito", "débito"]:
+        return "Tarjeta de crédito"
     if tipo_norm == "banco":
         return "Transferencia"
     return "Efectivo"

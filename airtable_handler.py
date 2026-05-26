@@ -403,13 +403,51 @@ def convertir_a_pen(monto, moneda):
 
 def _metodo_por_cuenta(nombre_cuenta):
     tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta) or "")
-    if tipo == "credito":
-        return "Tarjeta de Crédito"
-    if tipo == "debito":
-        return "Tarjeta de Débito"
+    if tipo in ["credito", "debito"]:
+        return "Tarjeta de crédito"
     if tipo == "banco":
         return "Transferencia"
     return "Efectivo"
+
+
+def _metodo_compatible_airtable(metodo):
+    """Ajusta el método al catálogo real del single select 'Transacciones.Método'."""
+    try:
+        meta = airtable_api.table_meta("Transacciones") or {}
+        fields = meta.get("fields", [])
+        metodo_field = next((f for f in fields if f.get("name") == "Método"), None)
+        choices = [c.get("name", "") for c in (metodo_field or {}).get("options", {}).get("choices", []) if c.get("name")]
+    except Exception:
+        choices = []
+
+    metodo_txt = str(metodo or "").strip()
+    if not choices:
+        return metodo_txt or "Transferencia"
+
+    # Match exacto
+    if metodo_txt in choices:
+        return metodo_txt
+
+    # Match normalizado (sin acentos / casefold)
+    metodo_norm = normalizar_texto(metodo_txt)
+    for c in choices:
+        if normalizar_texto(c) == metodo_norm:
+            return c
+
+    # Sinónimos útiles
+    candidatos = []
+    if metodo_norm in ["tarjeta de credito", "tarjeta de debito", "efectivo"]:
+        candidatos = ["Tarjeta de crédito", "Transferencia", "Efectivo"]
+    elif metodo_norm == "transferencia":
+        candidatos = ["Transferencia"]
+
+    for cand in candidatos:
+        for c in choices:
+            if normalizar_texto(c) == normalizar_texto(cand):
+                return c
+
+    # Fallback seguro: primera opción disponible
+    return choices[0]
 
 
 def _siguiente_id_pendiente():
@@ -599,8 +637,18 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
         )
 
     row = p["_row"]
-    ahora = now_str()
-    pend_ws.update(f"J{row}:N{row}", [["Confirmado", "", tx_id, ahora, nota_extra]], value_input_option="RAW")
+    ahora_iso = get_now().isoformat(timespec="seconds")
+
+    # Evitar 422 por campos tipados (ej. Confianza:number) enviando solo campos necesarios.
+    record = pend_ws._record_for_row(row)
+    update_fields = {
+        "Estado": "Confirmado",
+        "TXID": tx_id,
+        "FechaResolucion": ahora_iso,
+    }
+    if str(nota_extra).strip():
+        update_fields["Observacion"] = str(nota_extra).strip()
+    airtable_api.update_record("MovimientosPendientes", record["id"], update_fields)
     _cache_invalidate("pendientes_values")
 
     return {
@@ -622,8 +670,16 @@ def descartar_movimiento_pendiente(pendiente_id, motivo=""):
         raise ValueError(f"El pendiente '{pendiente_id}' no está en estado Pendiente.")
 
     row = p["_row"]
-    ahora = now_str()
-    pend_ws.update(f"J{row}:N{row}", [["Descartado", "", "", ahora, motivo]], value_input_option="RAW")
+    ahora_iso = get_now().isoformat(timespec="seconds")
+
+    record = pend_ws._record_for_row(row)
+    update_fields = {
+        "Estado": "Descartado",
+        "FechaResolucion": ahora_iso,
+    }
+    if str(motivo).strip():
+        update_fields["Observacion"] = str(motivo).strip()
+    airtable_api.update_record("MovimientosPendientes", record["id"], update_fields)
     _cache_invalidate("pendientes_values")
     return {"pendiente_id": str(p.get("ID", pendiente_id)).strip(), "motivo": motivo}
 
@@ -1534,6 +1590,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
 
     cuenta_info = obtener_cuenta_por_nombre(cuenta)
     cuenta_final = cuenta_info["Nombre"] if cuenta_info else cuenta
+    metodo = _metodo_compatible_airtable(metodo)
 
     deuda_id = ""
     if tipo.lower() == "gasto" and es_cuenta_credito(cuenta_final):
