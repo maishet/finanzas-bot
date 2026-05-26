@@ -430,23 +430,28 @@ def registrar_movimiento_pendiente(
         raise ValueError(f"Cuenta '{cuenta}' no existe.")
 
     pend_id = _siguiente_id_pendiente()
-    fila = [
-        pend_id,
-        now_str(),
-        fuente,
-        cuenta_info["Nombre"],
-        "Ingreso" if tipo_norm == "ingreso" else "Gasto",
-        round(float(monto_num), 2),
-        (moneda or "PEN").upper(),
-        descripcion,
-        referencia,
-        "Pendiente",
-        confianza,
-        "",
-        "",
-        observacion,
-    ]
-    pend_ws.append_row(fila, value_input_option="RAW")
+    fecha_detectada = datetime.now(ZoneInfo(config.TIMEZONE)).isoformat(timespec="seconds")
+
+    fields = {
+        "ID": pend_id,
+        "FechaDetectada": fecha_detectada,
+        "Fuente": str(fuente or "Manual").strip(),
+        "Cuenta": cuenta_info["Nombre"],
+        "Tipo": "Ingreso" if tipo_norm == "ingreso" else "Gasto",
+        "Monto": round(float(monto_num), 2),
+        "Moneda": (moneda or "PEN").upper(),
+        "Descripcion": descripcion or "",
+        "Referencia": referencia or "",
+        "Estado": "Pendiente",
+    }
+
+    if str(confianza).strip() != "":
+        fields["Confianza"] = parsear_numero(confianza)
+    if str(observacion).strip():
+        fields["Observacion"] = str(observacion).strip()
+
+    airtable_api.create_record("MovimientosPendientes", fields)
+    _cache_invalidate("pendientes_values")
     return pend_id
 
 
