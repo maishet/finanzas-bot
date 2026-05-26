@@ -292,7 +292,7 @@ def now_str(fmt="%Y-%m-%d %H:%M:%S", tz_name=None):
     return get_now(tz_name).strftime(fmt)
 
 def parsear_fecha(valor):
-    """Intenta parsear fechas en formatos frecuentes de la hoja."""
+    """Intenta parsear fechas en formatos frecuentes de la hoja/Airtable."""
     if isinstance(valor, datetime):
         return valor
 
@@ -300,12 +300,24 @@ def parsear_fecha(valor):
     if not txt:
         return None
 
+    # 1) ISO 8601 (Airtable DateTime suele devolver algo como 2026-05-25T14:30:00.000Z)
+    try:
+        iso_txt = txt.replace("Z", "+00:00")
+        return datetime.fromisoformat(iso_txt)
+    except Exception:
+        pass
+
+    # 2) Formatos legacy/manuales
     formatos = [
         "%d/%m/%Y",
-        "%Y-%m-%d",
-        "%Y-%m-%d %H:%M:%S",
-        "%d-%m-%Y",
+        "%d/%m/%Y %H:%M",
         "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%d-%m-%Y",
     ]
     for fmt in formatos:
         try:
@@ -974,7 +986,13 @@ def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None):
     if not candidatas:
         return None
 
-    candidatas.sort(key=lambda x: x.get("_fecha_venc") or datetime.max)
+    # Orden robusto ante mezcla de datetimes con/sin tz (ISO de Airtable vs datetime nativo)
+    candidatas.sort(
+        key=lambda x: (
+            x.get("_fecha_venc") is None,
+            (x.get("_fecha_venc").date().toordinal() if x.get("_fecha_venc") else 9999999),
+        )
+    )
     return candidatas[0]
 
 
