@@ -1293,7 +1293,15 @@ async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
         await update.effective_message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error(f"Error registrando pendiente: {e}")
-        await update.effective_message.reply_text("❌ Error inesperado registrando pendiente.")
+        err = str(e)
+        if "422" in err:
+            await update.effective_message.reply_text(
+                "❌ Airtable rechazó el registro (422).\n"
+                "Revisa la tabla MovimientosPendientes: el campo 'Fuente' debe incluir la opción 'ManualTelegram' "
+                "(además de 'GmailPush')."
+            )
+        else:
+            await update.effective_message.reply_text("❌ Error inesperado registrando pendiente.")
 
 
 @restricted

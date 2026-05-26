@@ -123,7 +123,7 @@ DEFAULT_FIELD_DEFS = {
     "MovimientosPendientes": [
         _text("ID"),
         _datetime("FechaDetectada"),
-        _single_select("Fuente", ["GmailPush"]),
+        _single_select("Fuente", ["GmailPush", "ManualTelegram", "Manual"]),
         _single_select("Cuenta", ["Efectivo", "BCP", "AMEX"]),
         _single_select("Tipo", ["Gasto", "Ingreso"]),
         _number("Monto"),
