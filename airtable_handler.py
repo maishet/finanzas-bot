@@ -2009,7 +2009,8 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
         )
 
     if filas:
-        snap_ws.append_rows(filas, value_input_option="RAW")
+        for fila in filas:
+            snap_ws.append_row(fila, value_input_option="RAW")
 
     return {
         "snapshot_id": snapshot_id,
