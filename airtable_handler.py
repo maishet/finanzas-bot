@@ -430,7 +430,7 @@ def registrar_movimiento_pendiente(
         raise ValueError(f"Cuenta '{cuenta}' no existe.")
 
     pend_id = _siguiente_id_pendiente()
-    fecha_detectada = datetime.now(ZoneInfo(config.TIMEZONE)).isoformat(timespec="seconds")
+    fecha_detectada = get_now().isoformat(timespec="seconds")
 
     fields = {
         "ID": pend_id,
