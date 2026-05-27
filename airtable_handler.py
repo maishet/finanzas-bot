@@ -592,37 +592,64 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
     moneda = str(p.get("Moneda", "PEN")).upper()
     descripcion = str(p.get("Descripcion", "")).strip()
     referencia = str(p.get("Referencia", "")).strip()
+    observacion = str(p.get("Observacion", "")).strip()
 
     nota = descripcion
     if referencia:
         nota = f"{nota} | Ref: {referencia}" if nota else f"Ref: {referencia}"
     if nota_extra:
         nota = f"{nota}. {nota_extra}" if nota else nota_extra
-    # Si es un pago a tarjeta de crédito (pago de deuda), intentar usar pagar_deuda
+
+    texto_contexto = " | ".join([descripcion, referencia, observacion, nota_extra]).strip()
+    texto_contexto_norm = normalizar_texto(texto_contexto)
     tx_id = None
-    if es_cuenta_credito(cuenta):
-        desc_norm = normalizar_texto(descripcion)
-        if "pago" in desc_norm or "pago de tarjeta" in desc_norm or "pago tarjeta" in desc_norm:
+
+    # Caso especial: pago de tarjeta propia detectado por Gmail o por un pendiente manual.
+    if "pago_tarjeta_propia" in texto_contexto_norm or "pago de tarjeta propia" in texto_contexto_norm or "constancia de pago de tarjeta" in texto_contexto_norm:
+        origen_match = re.search(r"(?:origen|desde)=([^|]+)", texto_contexto, re.IGNORECASE)
+        destino_match = re.search(r"(?:destino|pagado a)=([^|]+)", texto_contexto, re.IGNORECASE)
+        cuenta_origen = str((origen_match.group(1) if origen_match else "") or cuenta).strip()
+        cuenta_destino = str(destino_match.group(1) if destino_match else "").strip()
+
+        if not cuenta_destino:
+            # Fallback: si el texto trae alguna cuenta crédito, usarla.
+            cuenta_destino_detectada = detectar_cuenta_en_texto(texto_contexto)
+            if cuenta_destino_detectada and es_cuenta_credito(cuenta_destino_detectada.get("Nombre", "")):
+                cuenta_destino = cuenta_destino_detectada.get("Nombre", "")
+
+        deuda_obj = obtener_deuda_activa_por_cuenta(cuenta_destino) if cuenta_destino else None
+        if deuda_obj and cuenta_origen and es_cuenta_banco(cuenta_origen):
+            pago_res = pagar_deuda(
+                str(deuda_obj.get("ID", "")).strip(),
+                monto,
+                moneda,
+                cuenta_origen,
+                nota=nota,
+            )
+            tx_id = pago_res.get("trans_id")
+            cuenta = cuenta_origen
+            tipo = "Gasto"
+
+    # Flujo tradicional: si el pendiente cayó como gasto sobre una tarjeta de crédito,
+    # intentamos resolverlo como pago de deuda usando la cuenta asociada.
+    if not tx_id and es_cuenta_credito(cuenta):
+        desc_norm = normalizar_texto(f"{descripcion} {observacion}")
+        if "pago" in desc_norm or "tarjeta" in desc_norm:
             deuda = obtener_deuda_activa_por_cuenta(cuenta)
             if deuda:
-                deuda_id = str(deuda.get("ID", "")).strip()
-                # Intentar detectar la cuenta banco origen por últimos 4 dígitos en la descripción
                 source_account = None
-                for suf in re.findall(r"(\d{4})", descripcion or ""):
+                for suf in re.findall(r"(\d{4})", f"{descripcion} {observacion}"):
                     cand = detectar_cuenta_por_ultimos_digitos(suf)
                     if cand and es_cuenta_banco(cand.get("Nombre", "")):
                         source_account = cand.get("Nombre")
                         break
-                # Si no se detectó, usar la cuenta asociada en la deuda
                 if not source_account:
                     source_account = deuda.get("CuentaAsociada")
                 if source_account and es_cuenta_banco(source_account):
-                    try:
-                        pago_res = pagar_deuda(deuda_id, monto, moneda, source_account, nota)
-                        tx_id = pago_res.get("trans_id")
-                    except Exception as e:
-                        # Si falla el pago automático, caer al registro normal
-                        logger.warning(f"No se pudo registrar pago de deuda automáticamente: {e}")
+                    pago_res = pagar_deuda(str(deuda.get("ID", "")).strip(), monto, moneda, source_account, nota)
+                    tx_id = pago_res.get("trans_id")
+                    cuenta = source_account
+                    tipo = "Gasto"
 
     if not tx_id:
         tx_id = add_transaction(
@@ -1354,6 +1381,50 @@ def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta):
     )
     return True
 
+
+def ajustar_pago_deuda(deuda_id, delta_pago, moneda_delta):
+    """Ajusta MontoPagado de una deuda por ID. delta positivo suma, negativo resta."""
+    deuda = obtener_deuda_por_id(deuda_id)
+    if not deuda:
+        logger.warning(f"No se encontró deuda ID '{deuda_id}' para ajuste de pago.")
+        return False
+
+    row = deuda["_row"]
+    moneda_deuda = str(deuda.get("Moneda", "PEN")).upper()
+    delta_convertido = convertir_moneda(parsear_numero(delta_pago), moneda_delta, moneda_deuda)
+
+    monto_pagado_actual = parsear_numero(deuda.get("MontoPagado", 0))
+    nuevo_pagado = round(monto_pagado_actual + delta_convertido, 2)
+    if nuevo_pagado < 0:
+        nuevo_pagado = 0.0
+
+    headers = deudas_ws.row_values(1)
+    col_idx = None
+    for idx, h in enumerate(headers, start=1):
+        if normalizar_texto(h) == normalizar_texto("MontoPagado"):
+            col_idx = idx
+            break
+
+    if col_idx:
+        deudas_ws.update_cell(row, col_idx, nuevo_pagado)
+    else:
+        deudas_ws.update(f"F{row}", [[nuevo_pagado]], value_input_option="RAW")
+
+    _cache_invalidate("deudas_records")
+    logger.info(
+        "Pago deuda ajuste | id=%s fila=%s actual=%.2f delta=%.2f %s convertido=%.2f %s nuevo=%.2f",
+        deuda_id,
+        row,
+        monto_pagado_actual,
+        parsear_numero(delta_pago),
+        (moneda_delta or "PEN").upper(),
+        delta_convertido,
+        moneda_deuda,
+        nuevo_pagado,
+    )
+    sincronizar_estado_deudas()
+    return True
+
 def obtener_transaccion_por_id(trans_id):
     trans_id_norm = str(trans_id or "").strip().upper()
     if not trans_id_norm:
@@ -1389,9 +1460,18 @@ def eliminar_transaccion(trans_id):
     cuenta = str(trans.get("Cuenta", "Efectivo")).strip() or "Efectivo"
     deuda_id = str(trans.get("DeudaID", "")).strip()
 
+    es_pago_deuda = normalizar_texto(trans.get("Categoría", "")) == "deudas" and normalizar_texto(trans.get("Subcategoría", "")) == "pago" and deuda_id
+
     _aplicar_reversa_saldo(tipo, cuenta, monto, moneda)
 
-    if normalizar_texto(tipo) == "gasto" and deuda_id:
+    if es_pago_deuda:
+        deuda = obtener_deuda_por_id(deuda_id)
+        cuenta_asociada = deuda.get("CuentaAsociada", "") if deuda else ""
+        deuda_moneda = str(deuda.get("Moneda", moneda)).upper() if deuda else moneda
+        if cuenta_asociada:
+            actualizar_saldo_cuenta(cuenta_asociada, "gasto", convertir_a_pen(monto, moneda))
+        ajustar_pago_deuda(deuda_id, -monto, moneda)
+    elif normalizar_texto(tipo) == "gasto" and deuda_id:
         ajustar_monto_deuda(deuda_id, -monto, moneda)
 
     trans_ws.delete_rows(row)
@@ -1463,7 +1543,7 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
         fecha_dt = parsear_fecha(nuevo_valor)
         if not fecha_dt:
             raise ValueError("Fecha inválida. Usa DD/MM/AAAA o YYYY-MM-DD.")
-        nuevo["fecha"] = fecha_dt.strftime("%Y-%m-%d %H:%M:%S")
+        nuevo["fecha"] = fecha_dt.isoformat(timespec="seconds")
     else:
         raise ValueError("Campo no soportado. Usa monto, moneda, categoria, subcategoria, cuenta, metodo, nota o fecha.")
 
@@ -1523,12 +1603,26 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
     if celda_saldo is not None and str(celda_saldo).strip() != "":
         saldo_actual = parsear_numero(celda_saldo)
 
-    if tipo_transaccion.lower() == "ingreso":
-        nuevo_saldo = saldo_actual + monto_pen
-    elif tipo_transaccion.lower() == "gasto":
-        nuevo_saldo = saldo_actual - monto_pen
+    tipo_norm = normalizar_texto(tipo_transaccion)
+    tipo_cuenta = normalizar_texto(cuenta.get("Tipo", ""))
+
+    # En cuentas de crédito el saldo representa deuda pendiente:
+    # - gasto => sube la deuda
+    # - ingreso => baja la deuda
+    if tipo_cuenta == "credito":
+        if tipo_norm == "ingreso":
+            nuevo_saldo = saldo_actual - monto_pen
+        elif tipo_norm == "gasto":
+            nuevo_saldo = saldo_actual + monto_pen
+        else:
+            return False
     else:
-        return False
+        if tipo_norm == "ingreso":
+            nuevo_saldo = saldo_actual + monto_pen
+        elif tipo_norm == "gasto":
+            nuevo_saldo = saldo_actual - monto_pen
+        else:
+            return False
 
     nuevo_saldo = round(nuevo_saldo, 2)
     # Registrar en log el detalle de la operación antes de escribir en Airtable
@@ -1695,7 +1789,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
             f"requerido PEN {pago_en_pen:,.2f}."
         )
 
-    # Actualizar MontoPagado en la deuda.
+    # Actualizar MontoPagado en la deuda y reducir la deuda pendiente de la cuenta asociada.
     nuevo_pagado = round(monto_pagado + pago_en_moneda_deuda, 2)
     logger.info(
         "Pago deuda | deuda_id=%s fila=F%s pagado_actual=%.2f pago_registrado=%.2f pagado_nuevo=%.2f moneda=%s",
@@ -1708,6 +1802,9 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     )
     deudas_ws.update(f"F{row_deuda}", [[nuevo_pagado]], value_input_option="RAW")
     _cache_invalidate("deudas_records")
+    cuenta_asociada = str(deuda.get("CuentaAsociada", "")).strip()
+    if cuenta_asociada:
+        actualizar_saldo_cuenta(cuenta_asociada, "ingreso", pago_en_pen)
 
     # Avanzar vencimiento un mes en cada pago registrado.
     # Si el pago completa la deuda, marcamos la fila actual como Pagada y

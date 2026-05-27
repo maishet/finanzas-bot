@@ -173,7 +173,10 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💳 DEUDAS\n"
         "• /deudas - Lista de tarjetas de crédito con saldo pendiente\n"
         "• /pagar <deuda_id> <monto> <cuenta_banco> [nota]\n"
-        "  Ejemplo: /pagar 1 250 BCP pago quincena\n\n"
+        "  Ejemplo: /pagar 1 250 BCP pago quincena\n"
+        "• Si llega un pago de tarjeta por Gmail y está en pendientes,\n"
+        "  al tocar ✅ se confirma automáticamente como pago de deuda (sin pedir categoría).\n"
+        "• También puedes usar /confirmar_pendiente o /cp para confirmar por comando.\n\n"
         "🧾 GESTIÓN\n"
         "• /editar <ID> <campo> <valor> - Edita una transacción\n"
         "• /eliminar <ID> - Elimina una transacción\n"
@@ -677,6 +680,49 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if accion == "confirm":
+        # Si el pendiente corresponde a pago de tarjeta propia, confirmar directo
+        # como pago de deuda sin pedir categoría (flujo no ambiguo).
+        try:
+            pendientes = listar_movimientos_pendientes(limit=200)
+        except Exception:
+            pendientes = []
+
+        pendiente_obj = None
+        for p in pendientes:
+            if str(p.get("ID", "")).strip().upper() == pend_id.upper():
+                pendiente_obj = p
+                break
+
+        if pendiente_obj:
+            contexto = " | ".join([
+                str(pendiente_obj.get("Descripcion", "") or ""),
+                str(pendiente_obj.get("Referencia", "") or ""),
+                str(pendiente_obj.get("Observacion", "") or ""),
+            ]).lower()
+
+            if (
+                "pago_tarjeta_propia" in contexto
+                or "pago de tarjeta propia" in contexto
+                or "constancia de pago de tarjeta" in contexto
+            ):
+                try:
+                    await _confirmar_pendiente_con_categoria(
+                        update,
+                        context,
+                        pend_id,
+                        "Deudas",
+                        "Auto-confirmado desde botón (pago de tarjeta detectado)",
+                    )
+                    await query.edit_message_text(
+                        f"✅ {pend_id} confirmado automáticamente como pago de deuda."
+                    )
+                except ValueError as e:
+                    await query.edit_message_text(f"❌ {e}")
+                except Exception as e:
+                    logger.error(f"Error auto-confirmando pago de tarjeta desde botón: {e}")
+                    await query.edit_message_text("❌ Error inesperado al confirmar pago de tarjeta.")
+                return
+
         context.user_data[PENDING_CONFIRM_KEY] = {"id": pend_id, "nota": ""}
         sugerencias = []
         try:
@@ -1326,8 +1372,20 @@ async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     keyboard = []
     for p in pendientes:
         monto = parsear_numero(p.get("Monto", 0))
+        contexto = " | ".join([
+            str(p.get("Descripcion", "") or ""),
+            str(p.get("Referencia", "") or ""),
+            str(p.get("Observacion", "") or ""),
+        ]).lower()
+        es_pago_tarjeta = (
+            "pago_tarjeta_propia" in contexto
+            or "pago de tarjeta propia" in contexto
+            or "constancia de pago de tarjeta" in contexto
+        )
+        tag = " [PAGO TARJETA]" if es_pago_tarjeta else ""
+
         lineas.append(
-            f"\n• {p.get('ID', '')} | {p.get('Tipo', '')} {p.get('Moneda', 'PEN')} {monto:.2f}\n"
+            f"\n• {p.get('ID', '')}{tag} | {p.get('Tipo', '')} {p.get('Moneda', 'PEN')} {monto:.2f}\n"
             f"  Cuenta: {p.get('Cuenta', '')}\n"
             f"  Desc: {p.get('Descripcion', '')}"
         )

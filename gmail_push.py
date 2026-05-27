@@ -439,7 +439,56 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         )
         return None
 
-    # Si el tipo es "Transferencia" (especial), refinar a Ingreso o Gasto usando la cuenta
+    texto_norm = normalizar_texto(texto)
+    observacion_extra = f"From={from_header}; Date={msg.get('Date', '') or ''}"[:250]
+
+    if "pago de tarjeta propia" in texto_norm or "constancia de pago de tarjeta" in texto_norm:
+        raw_html = ""
+        try:
+            html_part = msg.get_body(preferencelist=("html",))
+            if html_part is not None:
+                raw_html = html_part.get_content() or ""
+        except Exception:
+            raw_html = ""
+
+        source_text = raw_html or texto
+        origen_match = re.search(
+            r"Desde</td>\s*<td[^>]*>\s*<b>([^<]+)</b><br>\*{4}\s*(\d{4})",
+            source_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        destino_match = re.search(
+            r"Pagado a</td>\s*<td[^>]*>\s*<b>([^<]+)</b><br>\*{4}\s*(\d{4})",
+            source_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        origen_nombre = ""
+        destino_nombre = ""
+        origen_ult4 = ""
+        destino_ult4 = ""
+
+        if origen_match:
+            origen_nombre = origen_match.group(1).strip()
+            origen_ult4 = origen_match.group(2).strip()
+            origen_cuenta = detectar_cuenta_por_ultimos_digitos(origen_ult4)
+            if origen_cuenta and origen_cuenta.get("Nombre"):
+                cuenta = origen_cuenta["Nombre"]
+                origen_nombre = origen_cuenta["Nombre"]
+            elif origen_nombre:
+                cuenta = origen_nombre
+
+        if destino_match:
+            destino_nombre = destino_match.group(1).strip()
+            destino_ult4 = destino_match.group(2).strip()
+            destino_cuenta = detectar_cuenta_por_ultimos_digitos(destino_ult4)
+            if destino_cuenta and destino_cuenta.get("Nombre"):
+                destino_nombre = destino_cuenta["Nombre"]
+
+        observacion_extra = (
+            f"PAGO_TARJETA_PROPIA|origen={origen_nombre or cuenta}|destino={destino_nombre}|"
+            f"origen4={origen_ult4}|destino4={destino_ult4}|{observacion_extra}"
+        )[:250]
+
     if tipo == "Transferencia":
         tipo = _refinar_tipo_transferencia(texto, cuenta)
 
@@ -465,9 +514,10 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         "referencia": referencia,
         "fuente": "GmailPush",
         "confianza": "alta" if sender_email else "media",
-        "observacion": f"From={from_header}; Date={fecha_iso}"[:250],
+        "observacion": observacion_extra,
         "sender_email": sender_email,
     }
+
 
 
 def _obtener_mensajes_desde_historial(start_history_id):
