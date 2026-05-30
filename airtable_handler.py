@@ -577,6 +577,141 @@ def _buscar_pendiente_por_id(pendiente_id):
     return None
 
 
+def _extraer_deuda_id_desde_texto(*textos):
+    """Extrae un posible ID de deuda desde textos libres.
+    Soporta formatos como: deuda:12, deuda=12, id deuda 12, D12."""
+    patrones = [
+        r"\bdeuda\s*[:=#-]?\s*([dD]?\d{1,9})\b",
+        r"\bid\s*deuda\s*[:=#-]?\s*([dD]?\d{1,9})\b",
+        r"\b([dD]\d{1,9})\b",
+    ]
+    for texto in textos:
+        t = str(texto or "")
+        if not t:
+            continue
+        for patron in patrones:
+            m = re.search(patron, t, re.IGNORECASE)
+            if not m:
+                continue
+            raw = str(m.group(1) or "").strip()
+            raw = raw[1:] if raw.lower().startswith("d") else raw
+            if raw.isdigit():
+                return raw
+    return ""
+
+
+def _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos):
+    """Retorna candidatas de deuda Servicio rankeadas por match de descripción + monto exacto.
+
+    Reglas duras:
+    - Misma CuentaAsociada
+    - Tipo Servicio
+    - Estado activa/vencida
+    - El monto del pendiente debe calzar EXACTO con lo pendiente de la deuda (±0.01 por redondeo)
+
+    Priorización:
+    - Mayor solapamiento entre descripción de la deuda y el contexto del pendiente
+    - Vencimiento más cercano
+    """
+    cuenta_norm = normalizar_texto(cuenta_banco)
+    if not cuenta_norm:
+        return []
+
+    try:
+        monto_num = parsear_numero(monto)
+        if monto_num <= 0:
+            return []
+    except Exception:
+        return []
+
+    contexto = normalizar_texto(" | ".join([str(t or "") for t in textos]))
+    contexto_tokens = set(re.findall(r"[a-z0-9]{4,}", contexto))
+
+    deudas = obtener_deudas_con_fila()
+    candidatos = []
+    for d in deudas:
+        if normalizar_texto(d.get("Tipo", "")) != "servicio":
+            continue
+        if normalizar_texto(d.get("CuentaAsociada", "")) != cuenta_norm:
+            continue
+
+        estado = normalizar_texto(d.get("Estado", ""))
+        if estado not in {"activa", "vencida"}:
+            continue
+
+        total = parsear_numero(d.get("MontoTotal", 0))
+        pagado = parsear_numero(d.get("MontoPagado", 0))
+        pendiente = round(total - pagado, 2)
+        if pendiente <= 0:
+            continue
+
+        moneda_deuda = str(d.get("Moneda", "PEN")).upper()
+        try:
+            pago_en_moneda_deuda = round(convertir_moneda(monto_num, moneda, moneda_deuda), 2)
+        except Exception:
+            continue
+
+        # Regla de negocio: en servicios el pago debe ser exacto.
+        if abs(pago_en_moneda_deuda - pendiente) > 0.01:
+            continue
+
+        desc_norm = normalizar_texto(d.get("Descripcion", ""))
+        desc_tokens = set(re.findall(r"[a-z0-9]{4,}", desc_norm))
+        overlap = len(desc_tokens.intersection(contexto_tokens)) if desc_tokens and contexto_tokens else 0
+
+        # Score principal por solapamiento semántico con la descripción en Airtable.
+        score = overlap
+
+        fecha_venc = parsear_fecha(d.get("FechaVencimiento"))
+        fecha_ord = fecha_venc.date().toordinal() if fecha_venc else 9999999
+        candidatos.append((score, fecha_ord, 0.0, d, pago_en_moneda_deuda, pendiente))
+
+    candidatos.sort(key=lambda x: (-x[0], x[1]))
+    return candidatos
+
+
+def obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3):
+    if not pendiente_obj:
+        return []
+    cuenta = str(pendiente_obj.get("Cuenta", "") or "").strip()
+    monto = pendiente_obj.get("Monto", 0)
+    moneda = str(pendiente_obj.get("Moneda", "PEN") or "PEN").upper()
+    descripcion = str(pendiente_obj.get("Descripcion", "") or "")
+    referencia = str(pendiente_obj.get("Referencia", "") or "")
+    observacion = str(pendiente_obj.get("Observacion", "") or "")
+
+    candidatos = _rankear_deudas_servicio(cuenta, monto, moneda, descripcion, referencia, observacion)
+    salida = []
+    for score, _, _, d, pago_conv, pendiente in candidatos[: max(1, int(max_items))]:
+        salida.append({
+            "id": str(d.get("ID", "")).strip(),
+            "descripcion": str(d.get("Descripcion", "") or ""),
+            "moneda": str(d.get("Moneda", "PEN") or "PEN").upper(),
+            "pendiente": round(float(pendiente), 2),
+            "pago_convertido": round(float(pago_conv), 2),
+            "score": round(float(score), 2),
+        })
+    return salida
+
+
+def _buscar_deuda_servicio_por_contexto(cuenta_banco, monto, moneda, *textos):
+    """Intenta detectar automáticamente deuda de tipo Servicio a partir del contexto.
+
+    Regla adicional anti-falsos-positivos:
+    - Solo auto-confirma si hay al menos 1 token compartido entre
+      contexto del pendiente y descripción de la deuda en Airtable (score >= 1).
+    """
+    candidatos = _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos)
+    if not candidatos:
+        return None
+
+    top_score = candidatos[0][0]
+    if top_score < 1:
+        return None
+
+    return candidatos[0][3]
+
+
 def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra=""):
     """Convierte un pendiente en transacción real y marca su resolución."""
     p = _buscar_pendiente_por_id(pendiente_id)
@@ -604,12 +739,52 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
     texto_contexto_norm = normalizar_texto(texto_contexto)
     tx_id = None
 
-    # Caso especial: pago de tarjeta propia detectado por Gmail o por un pendiente manual.
-    if "pago_tarjeta_propia" in texto_contexto_norm or "pago de tarjeta propia" in texto_contexto_norm or "constancia de pago de tarjeta" in texto_contexto_norm:
+    # Caso 1: usuario indica explícitamente el ID de deuda (ej. categoria "deuda:12").
+    deuda_id_explicita = _extraer_deuda_id_desde_texto(categoria_input, nota_extra, texto_contexto)
+    if not tx_id and deuda_id_explicita and es_cuenta_banco(cuenta):
+        deuda_obj = obtener_deuda_por_id(deuda_id_explicita)
+        if deuda_obj:
+            pago_res = pagar_deuda(
+                str(deuda_obj.get("ID", "")).strip(),
+                monto,
+                moneda,
+                cuenta,
+                nota=nota,
+            )
+            tx_id = pago_res.get("trans_id")
+            tipo = "Gasto"
+            categoria_input = "Deudas"
+
+    # Caso 1.5: detección automática de pago de deuda de servicio desde cuenta banco.
+    if not tx_id and es_cuenta_banco(cuenta):
+        deuda_servicio = _buscar_deuda_servicio_por_contexto(
+            cuenta,
+            monto,
+            moneda,
+            descripcion,
+            referencia,
+            observacion,
+            nota_extra,
+            categoria_input,
+        )
+        if deuda_servicio:
+            pago_res = pagar_deuda(
+                str(deuda_servicio.get("ID", "")).strip(),
+                monto,
+                moneda,
+                cuenta,
+                nota=nota,
+            )
+            tx_id = pago_res.get("trans_id")
+            tipo = "Gasto"
+            categoria_input = "Deudas"
+
+    # Caso 2: pago de tarjeta propia detectado por Gmail o por un pendiente manual.
+    if not tx_id and ("pago_tarjeta_propia" in texto_contexto_norm or "pago de tarjeta propia" in texto_contexto_norm or "constancia de pago de tarjeta" in texto_contexto_norm):
         origen_match = re.search(r"(?:origen|desde)=([^|]+)", texto_contexto, re.IGNORECASE)
         destino_match = re.search(r"(?:destino|pagado a)=([^|]+)", texto_contexto, re.IGNORECASE)
         cuenta_origen = str((origen_match.group(1) if origen_match else "") or cuenta).strip()
-        cuenta_destino = str(destino_match.group(1) if destino_match else "").strip()
+        cuenta_destino = str((destino_match.group(1) if destino_match else "").strip())
 
         if not cuenta_destino:
             # Fallback: si el texto trae alguna cuenta crédito, usarla.
@@ -629,6 +804,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
             tx_id = pago_res.get("trans_id")
             cuenta = cuenta_origen
             tipo = "Gasto"
+            categoria_input = "Deudas"
 
     # Flujo tradicional: si el pendiente cayó como gasto sobre una tarjeta de crédito,
     # intentamos resolverlo como pago de deuda usando la cuenta asociada.
@@ -1773,10 +1949,20 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
         raise ValueError("El monto de pago debe ser mayor a 0.")
 
     pago_en_moneda_deuda = round(convertir_moneda(monto_pago_origen, moneda_pago, moneda_deuda), 2)
-    if pago_en_moneda_deuda > pendiente:
-        raise ValueError(
-            f"El pago excede la deuda pendiente. Pendiente actual: {moneda_deuda} {pendiente:,.2f}"
-        )
+    tipo_deuda_norm = normalizar_texto(deuda.get("Tipo", ""))
+
+    if tipo_deuda_norm == "servicio":
+        # Regla de negocio: servicios se pagan por monto exacto.
+        if abs(pago_en_moneda_deuda - pendiente) > 0.01:
+            raise ValueError(
+                f"Para deudas de Servicio el pago debe ser exacto. "
+                f"Pendiente actual: {moneda_deuda} {pendiente:,.2f}"
+            )
+    else:
+        if pago_en_moneda_deuda > pendiente:
+            raise ValueError(
+                f"El pago excede la deuda pendiente. Pendiente actual: {moneda_deuda} {pendiente:,.2f}"
+            )
 
     # Verificar saldo disponible en banco (se maneja en PEN en la hoja Cuentas).
     pago_en_pen = convertir_a_pen(monto_pago_origen, moneda_pago)

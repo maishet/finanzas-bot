@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, time
 from functools import wraps
@@ -30,7 +31,8 @@ from airtable_handler import (obtener_categorias,
     generar_snapshot_saldos,
     registrar_movimiento_pendiente, listar_movimientos_pendientes,
     confirmar_movimiento_pendiente, descartar_movimiento_pendiente,
-    conciliar_cuenta, guardar_estado_gmail_push
+    conciliar_cuenta, guardar_estado_gmail_push,
+    obtener_candidatas_deuda_servicio_para_pendiente
 )
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
@@ -46,6 +48,90 @@ VOICE_PENDING_KEY = "voice_pending_payload"
 VOICE_EDITING_KEY = "voice_editing_mode"
 PENDING_CONFIRM_KEY = "pending_confirm_pending"
 VENTANAS_RECORDATORIO_DIAS = (7, 3, 1)
+
+
+def _normalizar_texto(txt: str) -> str:
+    txt = (txt or "").lower().strip()
+    replacements = {
+        "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ñ": "n",
+    }
+    for k, v in replacements.items():
+        txt = txt.replace(k, v)
+    return txt
+
+
+def _parse_categoria_y_nota(texto: str, categoria_sugerida: str = ""):
+    """Permite confirmar así:
+    - "Categoria"
+    - "Categoria | nota libre"
+    - "nota: texto" (usa categoría sugerida)
+    - "ok" / "si" / "sí" (usa categoría sugerida)
+    """
+    raw = (texto or "").strip()
+    raw_norm = _normalizar_texto(raw)
+
+    if raw_norm in {"ok", "si", "sí", "confirmar", "confirmo"} and categoria_sugerida:
+        return categoria_sugerida.strip(), ""
+
+    if raw_norm.startswith("nota:") and categoria_sugerida:
+        return categoria_sugerida.strip(), raw[5:].strip()
+
+    if "|" in raw:
+        cat, nota = raw.split("|", 1)
+        return cat.strip(), nota.strip()
+
+    return raw.strip(), ""
+
+
+def _sugerir_categoria_para_pendiente(pendiente_obj: dict) -> str:
+    """Heurística simple para predecir categoría de un pendiente no-deuda."""
+    if not pendiente_obj:
+        return ""
+
+    tipo = _normalizar_texto(str(pendiente_obj.get("Tipo", "") or ""))
+    if tipo not in {"gasto", "ingreso"}:
+        tipo = "gasto"
+
+    texto = " | ".join([
+        str(pendiente_obj.get("Descripcion", "") or ""),
+        str(pendiente_obj.get("Referencia", "") or ""),
+        str(pendiente_obj.get("Observacion", "") or ""),
+    ])
+    contexto = _normalizar_texto(texto)
+
+    reglas = [
+        (r"\b(uber|didi|cabify|taxi|peaje|gasolina|grifo|combustible|pasaje|metro)\b", "Transporte"),
+        (r"\b(plaza vea|wong|metro|tottus|vivanda|restaurante|polleria|pizza|cafe|starbucks|rappi|pedido)\b", "Alimentación"),
+        (r"\b(netflix|spotify|cine|steam|juego|juegos|ocio|entretenimiento)\b", "Ocio"),
+        (r"\b(luz|agua|internet|telefono|movistar|claro|entel|bitel)\b", "Vivienda"),
+        (r"\b(farmacia|botica|clinica|medico|salud)\b", "Otros"),
+        (r"\b(ropa|zapat|falabella|ripley|saga)\b", "Ropa"),
+        (r"\b(amazon|pc|laptop|celular|tecnologia|software)\b", "Tecnología"),
+        (r"\b(sueldo|planilla|nomina|salario|honorario|cliente|cobro)\b", "Sueldo"),
+        (r"\b(ahorro|fondo mutuo|inversion|broker|etf|accion)\b", "Inversiones"),
+    ]
+
+    sugerida = ""
+    for patron, categoria in reglas:
+        if re.search(patron, contexto):
+            sugerida = categoria
+            break
+
+    if not sugerida:
+        sugerida = "Sueldo" if tipo == "ingreso" else "Otros"
+
+    try:
+        categorias = obtener_categorias("Ingreso" if tipo == "ingreso" else "Gasto")
+        if categorias:
+            validas = {str(c.get("original", "")).strip().lower(): str(c.get("original", "")).strip() for c in categorias}
+            if sugerida.lower() in validas:
+                return validas[sugerida.lower()]
+            # fallback: primera categoría existente en la base del tipo correcto
+            return next(iter(validas.values()))
+    except Exception:
+        pass
+
+    return sugerida
 
 
 class HealthHandler(tornado.web.RequestHandler):
@@ -589,13 +675,27 @@ async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def procesar_edicion_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pendiente = context.user_data.get(PENDING_CONFIRM_KEY)
     if pendiente:
-        categoria = (update.effective_message.text or "").strip()
+        texto_confirmacion = (update.effective_message.text or "").strip()
+        categoria_sugerida = str(pendiente.get("categoria_sugerida", "")).strip()
+        categoria, nota_inline = _parse_categoria_y_nota(texto_confirmacion, categoria_sugerida)
+
         if not categoria:
-            await update.effective_message.reply_text("⚠️ Escribe una categoría para confirmar el pendiente.")
+            msg = "⚠️ Escribe una categoría para confirmar el pendiente."
+            if categoria_sugerida:
+                msg += (
+                    f"\nSugerida: {categoria_sugerida}."
+                    "\nPuedes responder: 'ok' para usarla,"
+                    " o `categoria | nota` para confirmar con descripción."
+                )
+            await update.effective_message.reply_text(msg, parse_mode="Markdown")
             return
 
         pend_id = str(pendiente.get("id", "")).strip()
-        nota = str(pendiente.get("nota", "")).strip()
+        nota_base = str(pendiente.get("nota", "")).strip()
+        nota = nota_base
+        if nota_inline:
+            nota = f"{nota_base}. {nota_inline}".strip(". ") if nota_base else nota_inline
+
         context.user_data.pop(PENDING_CONFIRM_KEY, None)
 
         try:
@@ -660,12 +760,15 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     data = (query.data or "").strip()
-    partes = data.split(":", 2)
+    partes = data.split(":")
     if len(partes) < 3:
         return
 
     accion = partes[1]
     pend_id = partes[2].strip()
+
+    if accion == "manual":
+        accion = "confirm"
 
     if accion == "discard":
         try:
@@ -677,6 +780,25 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.error(f"Error descartando pendiente desde botón: {e}")
             await query.edit_message_text("❌ Error inesperado al descartar pendiente.")
+        return
+
+    if accion == "pickdebt":
+        if len(partes) < 4:
+            await query.edit_message_text("❌ Selección inválida de deuda.")
+            return
+        deuda_id = partes[3].strip()
+        context.user_data[PENDING_CONFIRM_KEY] = {
+            "id": pend_id,
+            "nota": "",
+            "categoria_sugerida": f"deuda:{deuda_id}",
+        }
+        await query.edit_message_text(
+            f"✅ Deuda seleccionada: {deuda_id}.\n"
+            "Ahora responde:\n"
+            "• `ok` para confirmar\n"
+            "• `nota: ...` para añadir detalle y confirmar",
+            parse_mode="Markdown",
+        )
         return
 
     if accion == "confirm":
@@ -723,17 +845,70 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
                     await query.edit_message_text("❌ Error inesperado al confirmar pago de tarjeta.")
                 return
 
-        context.user_data[PENDING_CONFIRM_KEY] = {"id": pend_id, "nota": ""}
+        # Asistencia: si hay varias deudas de servicio candidatas, mostrar botones para elegir.
+        if pendiente_obj:
+            try:
+                candidatas = obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3)
+            except Exception:
+                candidatas = []
+
+            # Si no hay match semántico mínimo (score < 1), evitar auto-confirmar
+            # y pedir selección asistida por botón aunque exista solo 1 candidata.
+            top_score = float(candidatas[0].get("score", 0)) if candidatas else 0.0
+            requiere_eleccion = bool(candidatas) and (len(candidatas) >= 2 or top_score < 1)
+
+            if requiere_eleccion:
+                kb_deudas = []
+                for d in candidatas:
+                    did = d.get("id", "")
+                    desc = str(d.get("descripcion", "") or "Servicio")
+                    pendiente_txt = f"{d.get('moneda', 'PEN')} {float(d.get('pendiente', 0)):.2f}"
+                    label = f"💳 {did} | {desc[:16]} | Pend {pendiente_txt}"
+                    kb_deudas.append([
+                        InlineKeyboardButton(label, callback_data=f"pend:pickdebt:{pend_id}:{did}")
+                    ])
+
+                kb_deudas.append([
+                    InlineKeyboardButton("✍️ Prefiero escribir categoría", callback_data=f"pend:manual:{pend_id}")
+                ])
+
+                titulo = "🤔 Detecté varias deudas de servicio posibles. Elige una:"
+                if top_score < 1:
+                    titulo = "⚠️ No encontré match claro con la descripción de deuda. Elige la deuda correcta:"
+
+                await query.edit_message_text(
+                    titulo,
+                    reply_markup=InlineKeyboardMarkup(kb_deudas),
+                )
+                return
+
+        categoria_sugerida = _sugerir_categoria_para_pendiente(pendiente_obj) if pendiente_obj else ""
+        context.user_data[PENDING_CONFIRM_KEY] = {
+            "id": pend_id,
+            "nota": "",
+            "categoria_sugerida": categoria_sugerida,
+        }
+
         sugerencias = []
         try:
             sugerencias = [cat.get("original", "") for cat in obtener_categorias("Gasto")[:5]]
         except Exception:
             sugerencias = []
 
-        texto = f"✍️ Escribe la categoría para confirmar el pendiente {pend_id}."
+        texto = f"✍️ Confirma el pendiente {pend_id}."
+        if categoria_sugerida:
+            texto += f"\n🤖 Categoría sugerida: *{categoria_sugerida}*"
+            texto += "\nResponde `ok` para usarla, `nota: ...` para agregar detalle,"
+            texto += "\n o `categoria | nota` para ajustar ambos."
+        else:
+            texto += "\nEscribe `categoria | nota` (la nota es opcional)."
+
+        texto += "\n💳 Si fue pago de deuda/servicio, puedes enviar: `deuda:<ID> | nota`"
+        texto += "\n🤖 También intento detectarlo automáticamente usando la *descripción de la deuda* en Airtable y monto exacto."
+
         if sugerencias:
             texto += "\nSugerencias: " + ", ".join([s for s in sugerencias if s])
-        await query.edit_message_text(texto)
+        await query.edit_message_text(texto, parse_mode="Markdown")
         return
 
 @restricted
@@ -1436,12 +1611,16 @@ async def confirmar_pendiente_short_cmd(update: Update, context: ContextTypes.DE
 
 async def _confirmar_pendiente_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, pend_id: str, categoria: str, nota: str = ""):
     data = confirmar_movimiento_pendiente(pend_id, categoria, nota)
-    await update.effective_message.reply_text(
+    msg = (
         f"✅ Pendiente confirmado\n"
         f"🆔 Pendiente: {data['pendiente_id']}\n"
         f"🧾 TX: {data['tx_id']}\n"
+        f"🏷️ Categoría: {categoria}\n"
         f"📌 {data['tipo']} {data['moneda']} {data['monto']:.2f}"
     )
+    if str(nota).strip():
+        msg += f"\n📝 Nota: {nota.strip()}"
+    await update.effective_message.reply_text(msg)
 
 
 @restricted
