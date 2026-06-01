@@ -851,7 +851,34 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
     }
     if str(nota_extra).strip():
         update_fields["Observacion"] = str(nota_extra).strip()
-    airtable_api.update_record("MovimientosPendientes", record["id"], update_fields)
+
+    try:
+        airtable_api.update_record("MovimientosPendientes", record["id"], update_fields)
+    except Exception as e:
+        err_txt = str(e)
+        logger.error(f"Error actualizando pendiente {pendiente_id} con TXID ({tx_id}): {err_txt}")
+
+        # Fallback anti-422: algunas bases tipan TXID como campo no-texto/relación.
+        # En ese caso confirmamos el pendiente sin bloquear al usuario y dejamos traza.
+        if "422" in err_txt:
+            observacion_fallback = str(nota_extra or "").strip()
+            marca_tx = f"TX generado: {tx_id}"
+            observacion_fallback = f"{observacion_fallback} | {marca_tx}" if observacion_fallback else marca_tx
+            update_fields_fallback = {
+                "Estado": "Confirmado",
+                "FechaResolucion": ahora_iso,
+                "Observacion": observacion_fallback,
+            }
+            try:
+                airtable_api.update_record("MovimientosPendientes", record["id"], update_fields_fallback)
+            except Exception as e2:
+                raise ValueError(
+                    "No se pudo confirmar el pendiente en Airtable. "
+                    f"Error original: {err_txt}. Error fallback: {e2}"
+                )
+        else:
+            raise
+
     _cache_invalidate("pendientes_values")
 
     return {

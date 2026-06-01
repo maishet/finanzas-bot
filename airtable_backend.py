@@ -4,6 +4,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -240,9 +241,20 @@ class AirtableAPI:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                raw_err = e.read().decode("utf-8") if e.fp else ""
+                if raw_err:
+                    parsed = json.loads(raw_err)
+                    detail = parsed.get("error", {}).get("message") or raw_err
+            except Exception:
+                detail = ""
+            raise RuntimeError(f"HTTP Error {e.code}: {e.reason}. {detail}".strip()) from e
 
     def list_tables(self) -> Dict[str, Dict[str, Any]]:
         if self._tables_cache is not None:
