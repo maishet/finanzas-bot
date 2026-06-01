@@ -115,6 +115,15 @@ def _cache_invalidate(*keys):
         _SHEET_CACHE.pop(key, None)
 
 
+def refrescar_cache_general():
+    """Limpia cache local de lecturas y cache de metadata del backend Airtable."""
+    _cache_invalidate()
+    try:
+        airtable_api.refresh_cache()
+    except Exception as exc:
+        logger.warning(f"No se pudo refrescar cache de metadata Airtable: {exc}")
+
+
 def _leer_records_cacheados(worksheet, cache_key):
     valor = _cache_get(cache_key)
     if valor is not None:

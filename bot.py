@@ -32,7 +32,8 @@ from airtable_handler import (obtener_categorias,
     registrar_movimiento_pendiente, listar_movimientos_pendientes,
     confirmar_movimiento_pendiente, descartar_movimiento_pendiente,
     conciliar_cuenta, guardar_estado_gmail_push,
-    obtener_candidatas_deuda_servicio_para_pendiente
+    obtener_candidatas_deuda_servicio_para_pendiente,
+    refrescar_cache_general
 )
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
@@ -274,7 +275,8 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /dp <ID> [motivo]  (alias corto de descartar)\n"
         "• /descartar_pendiente <ID> [motivo]\n"
         "• /conciliar <cuenta> <saldo_real> [moneda]\n"
-        "• /snapshot - Guarda snapshot manual de saldos\n\n"
+        "• /snapshot - Guarda snapshot manual de saldos\n"
+        "• /refreshcache - Limpia caché en memoria y recarga desde Airtable\n\n"
         "📬 GMAIL PUSH\n"
         "• /gmail_watch - Crea o renueva el watch de Gmail Push\n"
         "• /gmail_estado - Muestra el estado actual del watch\n"
@@ -291,6 +293,7 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Puedes usar USD: /gasto 20 USD Comida\n\n"
         "Escribe /ayuda o /help cuando quieras volver a ver esta lista."
     )
+
     await update.effective_message.reply_text(mensaje)
 
 
@@ -1745,8 +1748,21 @@ async def snapshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+async def refresh_cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        refrescar_cache_general()
+        await update.effective_message.reply_text(
+            "✅ Caché refrescado.\n"
+            "Desde ahora el bot tomará datos actualizados de Airtable."
+        )
+    except Exception as e:
+        logger.error(f"Error refrescando caché: {e}")
+        await update.effective_message.reply_text("❌ Error al refrescar caché.")
+
+
+@restricted
 async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando para regenerar el refresh token de Gmail si expiró o fue revocado."""
+
     msg = (
         "🔄 *Regenerar Refresh Token de Gmail*\n\n"
         "Si aparece `invalid_grant`, el refresh token fue revocado/expiró.\n\n"
@@ -1871,8 +1887,10 @@ def main():
                 BotCommand("descartar_pendiente", "Descartar pendiente"),
                 BotCommand("conciliar", "Conciliar una cuenta"),
                 BotCommand("snapshot", "Guardar snapshot de saldos"),
+                BotCommand("refreshcache", "Refrescar caché de Airtable"),
             ]
         )
+
 
     app.post_init = _configurar_comandos
     app.add_handler(CommandHandler("start", start))
@@ -1901,6 +1919,7 @@ def main():
     app.add_handler(CommandHandler("setear_gmail_token", setear_gmail_token_cmd))
     app.add_handler(CommandHandler("gmail_token_info", gmail_token_info_cmd))
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
+    app.add_handler(CommandHandler("refreshcache", refresh_cache_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
     app.add_handler(CallbackQueryHandler(callbacks_pendientes, pattern=r"^pend:"))
