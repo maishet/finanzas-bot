@@ -2295,27 +2295,41 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
     }
 
 def obtener_deudas_activas():
-    """Lista deudas (tarjetas) con saldo pendiente > 0 o estado 'Activa'"""
+    """Lista deudas con saldo pendiente en estado Activa o Vencida.
+    Se priorizan Vencidas para alertas y visualización."""
     sincronizar_estado_deudas()
-    # Usar obtener_deudas_con_fila() que lee con FORMATTED_VALUE
     deudas = obtener_deudas_con_fila()
-    activas = []
+    salida = []
     for d in deudas:
-        if normalizar_texto(d.get("Estado", "")) != "activa":
+        estado_norm = normalizar_texto(d.get("Estado", ""))
+        if estado_norm not in {"activa", "vencida"}:
             continue
+
         monto_total = parsear_numero(d.get("MontoTotal", 0))
         monto_pagado = parsear_numero(d.get("MontoPagado", 0))
-        pendiente = monto_total - monto_pagado
-        if pendiente > 0:
-            activas.append({
-                "id": str(d.get("ID", "")).strip(),
-                "descripcion": d.get("Descripcion", ""),
-                "pendiente": pendiente,
-                "moneda": d.get("Moneda", "PEN"),
-                "vencimiento": d.get("FechaVencimiento", ""),
-                "cuenta": d.get("CuentaAsociada", "")
-            })
-    return activas
+        pendiente = round(monto_total - monto_pagado, 2)
+        if pendiente <= 0:
+            continue
+
+        fecha_venc = parsear_fecha(d.get("FechaVencimiento"))
+        salida.append({
+            "id": str(d.get("ID", "")).strip(),
+            "descripcion": d.get("Descripcion", ""),
+            "pendiente": pendiente,
+            "moneda": d.get("Moneda", "PEN"),
+            "vencimiento": d.get("FechaVencimiento", ""),
+            "cuenta": d.get("CuentaAsociada", ""),
+            "estado": d.get("Estado", ""),
+            "estado_norm": estado_norm,
+            "fecha_venc_dt": fecha_venc,
+        })
+
+    # Primero vencidas, luego activas; dentro de cada grupo, por vencimiento más cercano.
+    salida.sort(key=lambda x: (
+        0 if x.get("estado_norm") == "vencida" else 1,
+        x.get("fecha_venc_dt").date().toordinal() if x.get("fecha_venc_dt") else 9999999,
+    ))
+    return salida
 
 def obtener_recordatorios_deudas(dias_alerta=3, fecha_referencia=None):
     """Retorna deudas vencidas o por vencer dentro de `dias_alerta`."""

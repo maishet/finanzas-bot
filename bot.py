@@ -424,19 +424,36 @@ async def _ejecutar_payload_voz(payload, update: Update):
         if intent == "deudas":
             deudas_activas = obtener_deudas_activas()
             if not deudas_activas:
-                await update.effective_message.reply_text("✅ No tienes deudas activas registradas.")
+                await update.effective_message.reply_text("✅ No tienes deudas activas ni vencidas registradas.")
                 return
-            mensaje = "💳 *Deudas Activas*\n\n"
-            for d in deudas_activas:
-                if d.get("id"):
-                    mensaje += f"• ID {d['id']} - {d['descripcion']}\n"
-                else:
-                    mensaje += f"• {d['descripcion']}\n"
-                mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
-                mensaje += f"   Vence: {d['vencimiento']}\n"
-                if d['cuenta']:
-                    mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
-                mensaje += "\n"
+
+            vencidas = [d for d in deudas_activas if str(d.get("estado_norm", "")) == "vencida"]
+            activas = [d for d in deudas_activas if str(d.get("estado_norm", "")) != "vencida"]
+
+            mensaje = "💳 *Deudas Pendientes (Activas + Vencidas)*\n\n"
+            if vencidas:
+                mensaje += f"🚨 *VENCIDAS: {len(vencidas)}*\n"
+                for d in vencidas:
+                    pref = f"• ID {d['id']} - " if d.get("id") else "• "
+                    mensaje += f"{pref}{d['descripcion']}\n"
+                    mensaje += f"   Estado: *{d.get('estado', 'Vencida')}*\n"
+                    mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
+                    mensaje += f"   Vence: {d['vencimiento']}\n"
+                    if d['cuenta']:
+                        mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
+                    mensaje += "\n"
+
+            if activas:
+                mensaje += f"✅ *ACTIVAS: {len(activas)}*\n"
+                for d in activas:
+                    pref = f"• ID {d['id']} - " if d.get("id") else "• "
+                    mensaje += f"{pref}{d['descripcion']}\n"
+                    mensaje += f"   Estado: {d.get('estado', 'Activa')}\n"
+                    mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
+                    mensaje += f"   Vence: {d['vencimiento']}\n"
+                    if d['cuenta']:
+                        mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
+                    mensaje += "\n"
             await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
             return
 
@@ -1170,19 +1187,36 @@ async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error deudas: {e}")
         return
     if not deudas_activas:
-        await update.effective_message.reply_text("✅ No tienes deudas activas registradas.")
+        await update.effective_message.reply_text("✅ No tienes deudas activas ni vencidas registradas.")
         return
-    mensaje = "💳 *Deudas Activas*\n\n"
-    for d in deudas_activas:
-        if d.get("id"):
-            mensaje += f"• ID {d['id']} - {d['descripcion']}\n"
-        else:
-            mensaje += f"• {d['descripcion']}\n"
-        mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
-        mensaje += f"   Vence: {d['vencimiento']}\n"
-        if d['cuenta']:
-            mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
-        mensaje += "\n"
+
+    vencidas = [d for d in deudas_activas if str(d.get("estado_norm", "")) == "vencida"]
+    activas = [d for d in deudas_activas if str(d.get("estado_norm", "")) != "vencida"]
+
+    mensaje = "💳 *Deudas Pendientes (Activas + Vencidas)*\n\n"
+    if vencidas:
+        mensaje += f"🚨 *VENCIDAS: {len(vencidas)}*\n"
+        for d in vencidas:
+            pref = f"• ID {d['id']} - " if d.get("id") else "• "
+            mensaje += f"{pref}{d['descripcion']}\n"
+            mensaje += f"   Estado: *{d.get('estado', 'Vencida')}*\n"
+            mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
+            mensaje += f"   Vence: {d['vencimiento']}\n"
+            if d['cuenta']:
+                mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
+            mensaje += "\n"
+
+    if activas:
+        mensaje += f"✅ *ACTIVAS: {len(activas)}*\n"
+        for d in activas:
+            pref = f"• ID {d['id']} - " if d.get("id") else "• "
+            mensaje += f"{pref}{d['descripcion']}\n"
+            mensaje += f"   Estado: {d.get('estado', 'Activa')}\n"
+            mensaje += f"   Pendiente: {d['moneda']} {d['pendiente']:,.2f}\n"
+            mensaje += f"   Vence: {d['vencimiento']}\n"
+            if d['cuenta']:
+                mensaje += f"   Cuenta asociada: {d['cuenta']}\n"
+            mensaje += "\n"
     await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
 
 @restricted
