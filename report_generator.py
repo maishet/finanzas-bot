@@ -604,7 +604,7 @@ def generar_reporte_mensual_pdf(datos):
     c.showPage()
 
     # Página 3: distribución
-    _draw_title(c, "Distribución y uso", f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    _draw_title(c, "Distribución y uso", f"Generado: {datos['generado_en']}")
     _draw_pie_categories(c, LEFT, PAGE_H - 10.6 * cm, CONTENT_W, 6.9 * cm, datos.get("gastos_por_categoria", {}))
 
     segmentos_detalle = datos.get("segmentos_detalle", {})
@@ -625,14 +625,14 @@ def generar_reporte_mensual_pdf(datos):
     c.showPage()
 
     # Página 4: top transacciones
-    _draw_title(c, "Top 10 transacciones más altas", f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    _draw_title(c, "Top 10 transacciones más altas", f"Generado: {datos['generado_en']}")
     movimientos = sorted(datos.get("movimientos", []), key=lambda x: x.get("monto_pen", 0), reverse=True)
     _draw_transactions_table(c, movimientos, LEFT, PAGE_H - 3.3 * cm, CONTENT_W)
     _draw_footer(c, 4)
     c.showPage()
 
     # Página 5: comparativo detallado de cuentas Banco vs Crédito
-    _draw_title(c, "Comparativo entre cuentas", f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    _draw_title(c, "Comparativo entre cuentas", f"Generado: {datos['generado_en']}")
     segmentos_detalle = datos.get("segmentos_detalle", {})
     comparativo_items = []
     for grupo_key, detalle in (("banco", segmentos_detalle.get("banco", {})), ("credito", segmentos_detalle.get("credito", {}))):
