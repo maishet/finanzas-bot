@@ -2491,12 +2491,23 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
             "transaccion_mayor": None,
             "gastos_por_categoria": {},
             "uso_cuentas": {},
+            "segmentos": {
+                "banco": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
+                "credito": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
+            },
             "movimientos": [],
         }
 
     movimientos = []
-    
-    # Encabezados: Fecha(B), Tipo(C), Monto(D), Moneda(E), Categoría(F), Cuenta(G), Nota(H)
+
+    # Mapa de tipo de cuenta para segmentación (Banco vs Crédito/Débito)
+    cuentas_records = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuenta_tipo_map = {}
+    for c in cuentas_records:
+        nombre = str(c.get("Nombre", "")).strip()
+        if not nombre:
+            continue
+        cuenta_tipo_map[normalizar_texto(nombre)] = normalizar_texto(c.get("Tipo", ""))
     for fila in valores:
         if not fila or len(fila) < 4:
             continue
@@ -2562,6 +2573,46 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         cat, val = next(iter(gastos_por_categoria.items()))
         categoria_top = {"categoria": cat, "monto_pen": val}
 
+    # Segmentación por tipo de cuenta
+    segmentos = {
+        "banco": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
+        "credito": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
+    }
+    segmentos_detalle = {"banco": {}, "credito": {}}
+    for m in movimientos:
+        tipo_cuenta = cuenta_tipo_map.get(normalizar_texto(m.get("cuenta", "")), "")
+        if tipo_cuenta == "banco":
+            grupo = "banco"
+        elif tipo_cuenta in {"credito", "debito"}:
+            grupo = "credito"
+        else:
+            continue
+
+        segmentos[grupo]["total_transacciones"] += 1
+        if normalizar_texto(m["tipo"]) == "ingreso":
+            segmentos[grupo]["ingresos"] += m["monto_pen"]
+        elif normalizar_texto(m["tipo"]) == "gasto":
+            segmentos[grupo]["gastos"] += m["monto_pen"]
+
+        cuenta_nombre = m.get("cuenta") or "Sin cuenta"
+        if cuenta_nombre not in segmentos_detalle[grupo]:
+            segmentos_detalle[grupo][cuenta_nombre] = {
+                "ingresos": 0.0,
+                "gastos": 0.0,
+                "ahorro": 0.0,
+                "total_transacciones": 0,
+            }
+        segmentos_detalle[grupo][cuenta_nombre]["total_transacciones"] += 1
+        if normalizar_texto(m["tipo"]) == "ingreso":
+            segmentos_detalle[grupo][cuenta_nombre]["ingresos"] += m["monto_pen"]
+        elif normalizar_texto(m["tipo"]) == "gasto":
+            segmentos_detalle[grupo][cuenta_nombre]["gastos"] += m["monto_pen"]
+
+    for grupo in segmentos.values():
+        grupo["ahorro"] = grupo["ingresos"] - grupo["gastos"]
+    for grupo in segmentos_detalle.values():
+        for cuenta_data in grupo.values():
+            cuenta_data["ahorro"] = cuenta_data["ingresos"] - cuenta_data["gastos"]
     transaccion_mayor = None
     if movimientos:
         tx = max(movimientos, key=lambda x: x["monto_pen"])
@@ -2588,5 +2639,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         "transaccion_mayor": transaccion_mayor,
         "gastos_por_categoria": gastos_por_categoria,
         "uso_cuentas": uso_cuentas,
+        "segmentos": segmentos,
+        "segmentos_detalle": segmentos_detalle,
         "movimientos": movimientos,
     }
