@@ -2038,24 +2038,18 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
             next_id = _siguiente_id_deuda()
             nueva_deuda_id = str(next_id)
             nueva_deuda_id_num = next_id
-            nueva_fecha_venc = fecha_venc_nueva.strftime("%d/%m/%Y") if fecha_venc_nueva else ""
+            nueva_fecha_venc_iso = fecha_venc_nueva.strftime("%Y-%m-%d") if fecha_venc_nueva else ""
             # Para servicios recurrentes, prefijar el monto del siguiente ciclo con el monto anterior.
             if tipo_norm == "servicio" or recurrente_flag in ("si", "true", "1", "yes"):
                 monto_inicial = round(float(monto_total), 2)
             else:
                 monto_inicial = 0.00
 
-            nueva_fila = [
-                nueva_deuda_id_num,
-                deuda.get("Descripcion", ""),
-                deuda.get("Tipo", ""),
-                monto_inicial,
-                deuda.get("Moneda", "PEN"),
-                0.00,
-                nueva_fecha_venc,
-                "Activa" if (fecha_venc_nueva and fecha_venc_nueva.date() <= get_now().date()) else "Programada",
-                deuda.get("CuentaAsociada", ""),
-            ]
+            periodo_nuevo = fecha_venc_nueva.strftime("%Y-%m") if fecha_venc_nueva else ""
+            fecha_corte_prev = parsear_fecha(deuda.get("FechaCorte"))
+            fecha_corte_nueva = avanzar_un_mes(fecha_corte_prev) if fecha_corte_prev else None
+            fecha_corte_nueva_iso = fecha_corte_nueva.strftime("%Y-%m-%d") if fecha_corte_nueva else ""
+
             logger.info(
                 "Crear nueva deuda recurrente | nueva_deuda_id=%s monto=%.2f moneda=%s cuenta_asociada=%s",
                 nueva_deuda_id,
@@ -2063,28 +2057,32 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
                 deuda.get("Moneda", "PEN"),
                 deuda.get("CuentaAsociada", ""),
             )
+
+            headers = deudas_ws.headers
+            payload = {
+                "ID": nueva_deuda_id_num,
+                "Descripcion": deuda.get("Descripcion", ""),
+                "Tipo": deuda.get("Tipo", ""),
+                "MontoTotal": monto_inicial,
+                "Moneda": deuda.get("Moneda", "PEN"),
+                "MontoPagado": 0.00,
+                "FechaVencimiento": nueva_fecha_venc_iso,
+                "Estado": "Activa",
+                "CuentaAsociada": deuda.get("CuentaAsociada", ""),
+            }
+            if "Periodo" in headers:
+                payload["Periodo"] = periodo_nuevo or deuda.get("Periodo", "")
+            if "FechaCorte" in headers:
+                payload["FechaCorte"] = fecha_corte_nueva_iso or deuda.get("FechaCorte", "")
+
             try:
-                deudas_ws.append_row(nueva_fila, value_input_option="RAW")
+                airtable_api.create_record("Deudas", payload)
             except Exception as e:
                 err_txt = str(e)
                 # Algunas bases tienen Deudas.ID como autonumber/formula/read-only.
                 # En ese caso reintentamos crear la fila sin enviar ID.
                 if "Field \"ID\" cannot accept the provided value" in err_txt or "HTTP Error 422" in err_txt:
-                    headers = deudas_ws.headers
-                    payload = {
-                        "Descripcion": deuda.get("Descripcion", ""),
-                        "Tipo": deuda.get("Tipo", ""),
-                        "MontoTotal": monto_inicial,
-                        "Moneda": deuda.get("Moneda", "PEN"),
-                        "MontoPagado": 0.00,
-                        "FechaVencimiento": nueva_fecha_venc,
-                        "Estado": "Activa" if (fecha_venc_nueva and fecha_venc_nueva.date() <= get_now().date()) else "Programada",
-                        "CuentaAsociada": deuda.get("CuentaAsociada", ""),
-                    }
-                    if "Periodo" in headers:
-                        payload["Periodo"] = deuda.get("Periodo", "")
-                    if "FechaCorte" in headers:
-                        payload["FechaCorte"] = deuda.get("FechaCorte", "")
+                    payload.pop("ID", None)
                     airtable_api.create_record("Deudas", payload)
                 else:
                     raise
