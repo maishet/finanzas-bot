@@ -2026,7 +2026,19 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
     _cache_invalidate("deudas_records")
     cuenta_asociada = str(deuda.get("CuentaAsociada", "")).strip()
     if cuenta_asociada:
-        actualizar_saldo_cuenta(cuenta_asociada, "ingreso", pago_en_pen)
+        tipo_cuenta_asociada = normalizar_texto(obtener_tipo_cuenta(cuenta_asociada) or "")
+        # Solo ajustar la cuenta asociada cuando sea línea de deuda (crédito/débito).
+        # Si la deuda está asociada a una cuenta Banco, ese ajuste se anula con el gasto
+        # posterior y deja el saldo igual (ingreso + gasto sobre la misma cuenta).
+        if tipo_cuenta_asociada in {"credito", "debito"}:
+            actualizar_saldo_cuenta(cuenta_asociada, "ingreso", pago_en_pen)
+        else:
+            logger.info(
+                "Omitir ajuste cuenta asociada | deuda_id=%s cuenta=%s tipo=%s",
+                deuda_id_str,
+                cuenta_asociada,
+                tipo_cuenta_asociada or "desconocido",
+            )
 
     # Avanzar vencimiento un mes en cada pago registrado.
     # Si el pago completa la deuda, marcamos la fila actual como Pagada y
