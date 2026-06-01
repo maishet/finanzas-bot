@@ -1355,7 +1355,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
     headers = deudas_ws.row_values(1)
     row_map = {h: "" for h in headers}
     # Valores comunes
-    row_map[headers[0]] = deuda_id if headers else deuda_id
+    row_map[headers[0]] = next_id if headers else next_id
     # Buscar campos y asignar si existen
     def set_if_present(key, value):
         for h in headers:
@@ -1364,7 +1364,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
                 return True
         return False
 
-    set_if_present("ID", deuda_id)
+    set_if_present("ID", next_id)
     set_if_present("Descripcion", descripcion)
     set_if_present("Tipo", tipo.capitalize())
     set_if_present("MontoTotal", 0.00)
@@ -2037,6 +2037,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
             # Crear nueva fila de deuda para el siguiente ciclo
             next_id = _siguiente_id_deuda()
             nueva_deuda_id = str(next_id)
+            nueva_deuda_id_num = next_id
             nueva_fecha_venc = fecha_venc_nueva.strftime("%d/%m/%Y") if fecha_venc_nueva else ""
             # Para servicios recurrentes, prefijar el monto del siguiente ciclo con el monto anterior.
             if tipo_norm == "servicio" or recurrente_flag in ("si", "true", "1", "yes"):
@@ -2045,7 +2046,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
                 monto_inicial = 0.00
 
             nueva_fila = [
-                nueva_deuda_id,
+                nueva_deuda_id_num,
                 deuda.get("Descripcion", ""),
                 deuda.get("Tipo", ""),
                 monto_inicial,
@@ -2062,7 +2063,31 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
                 deuda.get("Moneda", "PEN"),
                 deuda.get("CuentaAsociada", ""),
             )
-            deudas_ws.append_row(nueva_fila, value_input_option="RAW")
+            try:
+                deudas_ws.append_row(nueva_fila, value_input_option="RAW")
+            except Exception as e:
+                err_txt = str(e)
+                # Algunas bases tienen Deudas.ID como autonumber/formula/read-only.
+                # En ese caso reintentamos crear la fila sin enviar ID.
+                if "Field \"ID\" cannot accept the provided value" in err_txt or "HTTP Error 422" in err_txt:
+                    headers = deudas_ws.headers
+                    payload = {
+                        "Descripcion": deuda.get("Descripcion", ""),
+                        "Tipo": deuda.get("Tipo", ""),
+                        "MontoTotal": monto_inicial,
+                        "Moneda": deuda.get("Moneda", "PEN"),
+                        "MontoPagado": 0.00,
+                        "FechaVencimiento": nueva_fecha_venc,
+                        "Estado": "Activa" if (fecha_venc_nueva and fecha_venc_nueva.date() <= get_now().date()) else "Programada",
+                        "CuentaAsociada": deuda.get("CuentaAsociada", ""),
+                    }
+                    if "Periodo" in headers:
+                        payload["Periodo"] = deuda.get("Periodo", "")
+                    if "FechaCorte" in headers:
+                        payload["FechaCorte"] = deuda.get("FechaCorte", "")
+                    airtable_api.create_record("Deudas", payload)
+                else:
+                    raise
             _cache_invalidate("deudas_records")
     # NOTE: no actualizar la fecha de vencimiento en pagos parciales.
     # El vencimiento del ciclo se mantiene hasta que el ciclo sea marcado como Pagada
