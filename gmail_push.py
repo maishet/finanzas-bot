@@ -276,6 +276,18 @@ def _detectar_tipo(texto):
 
 
 def _extraer_monto(texto):
+    # 1) Priorizar montos explícitamente etiquetados (más robusto para correos HTML de BCP).
+    patrones_prioritarios = [
+        r"(?:monto\s*total|importe|monto\s*(?:pagado|enviado|transferido|del\s*consumo)?)\s*[:\-]?\s*(?:s/|pen|usd|us\$|\$)\s*([\d\.,]+)",
+        r"(?:s/|pen|usd|us\$|\$)\s*([\d\.,]+)\s*(?:monto\s*total|importe)",
+    ]
+    for patron_lbl in patrones_prioritarios:
+        m = re.search(patron_lbl, texto, flags=re.IGNORECASE)
+        if m:
+            val = parsear_numero(m.group(1))
+            if val > 0:
+                return round(val, 2)
+
     patron = re.compile(r"(?<!\d)(\d[\d\.,]{0,20}\d|\d)(?!\d)")
     candidatos = []
 
@@ -283,9 +295,10 @@ def _extraer_monto(texto):
         raw = m.group(1)
         # Evitar tomar como monto los últimos 4 dígitos de una cuenta/tarjeta.
         if re.fullmatch(r"\d{4}", raw):
-            nearby = texto[max(0, m.start() - 20) : min(len(texto), m.end() + 20)].lower()
+            nearby = texto[max(0, m.start() - 30) : min(len(texto), m.end() + 30)].lower()
             if "****" in nearby or "cuenta" in nearby or "tarjeta" in nearby or "numero" in nearby:
                 continue
+
         val = parsear_numero(raw)
         if val <= 0:
             continue
@@ -293,14 +306,24 @@ def _extraer_monto(texto):
         if "." not in raw and "," not in raw and val > 999999:
             continue
 
-        inicio = max(0, m.start() - 20)
-        fin = min(len(texto), m.end() + 20)
-        contexto = normalizar_texto(texto[inicio:fin])
+        inicio = max(0, m.start() - 30)
+        fin = min(len(texto), m.end() + 30)
+        tramo = texto[inicio:fin]
+        contexto = normalizar_texto(tramo)
         score = 0
         if any(k in contexto for k in ["monto", "importe", "total", "consumo", "cargo", "abono", "pago", "transferencia"]):
             score += 2
-        if any(sym in texto[inicio:fin] for sym in ["S/", "$", "PEN", "USD"]):
+        if any(sym in tramo for sym in ["S/", "$", "PEN", "USD"]):
             score += 1
+        if "." in raw or "," in raw:
+            score += 1
+
+        # Penalizar años/fechas para evitar falsos positivos como 2026.
+        if re.fullmatch(r"\d{4}", raw):
+            anio = int(raw)
+            if 1900 <= anio <= 2100 and any(k in contexto for k in ["fecha", "vencimiento", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "septiembre", "octubre", "noviembre", "diciembre"]):
+                score -= 4
+
         candidatos.append((score, val))
 
     if not candidatos:
