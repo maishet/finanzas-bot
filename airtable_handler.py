@@ -2473,8 +2473,8 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         año = ahora.year
 
     # Leer con FORMATTED_VALUE para evitar truncamiento
-    # Rango: B2:H1000 = Fecha, Tipo, Monto, Moneda, Categoría, Cuenta, Nota (sin ID)
-    valores = _leer_rango_formateado("Transacciones", "B2:H1000")
+    # Rango: B2:J1000 = Fecha, Tipo, Monto, Moneda, Categoría, Subcategoría, Cuenta, Método, Nota (sin ID)
+    valores = _leer_rango_formateado("Transacciones", "B2:J1000")
     
     if not valores:
         return {
@@ -2527,8 +2527,9 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
             monto_pen = convertir_a_pen(monto, moneda)
 
             categoria = str(fila[4] if len(fila) > 4 else "Sin categoría").strip() or "Sin categoría"  # Columna F
-            cuenta = str(fila[5] if len(fila) > 5 else "Sin cuenta").strip() or "Sin cuenta"  # Columna G
-            nota = str(fila[6] if len(fila) > 6 else "").strip()  # Columna H
+            _subcategoria = str(fila[5] if len(fila) > 5 else "").strip()  # Columna G (no usada en KPIs)
+            cuenta = str(fila[6] if len(fila) > 6 else "Sin cuenta").strip() or "Sin cuenta"  # Columna H
+            nota = str(fila[8] if len(fila) > 8 else "").strip()  # Columna J
             tx_id = fecha_dt.strftime("%Y%m%d") + "-" + tipo[:1]  # ID generado a partir de fecha y tipo
 
             movimientos.append({
