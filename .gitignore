@@ -26,6 +26,7 @@ credentials.json
 # Logs and runtime files
 *.log
 *.pid
+local_exports/
 
 # Testing and coverage
 .pytest_cache/
