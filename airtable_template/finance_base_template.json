@@ -1,0 +1,638 @@
+{
+  "generated_at": "2026-06-06T03:28:40.970842+00:00",
+  "source": "sanitized_airtable_schema",
+  "tables": {
+    "Transacciones": {
+      "schema": [
+        {
+          "name": "ID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Fecha",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        },
+        {
+          "name": "Tipo",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Gasto"
+              },
+              {
+                "name": "Ingreso"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Monto",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "Moneda",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "PEN"
+              },
+              {
+                "name": "USD"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Categoría",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Subcategoría",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Cuenta",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Método",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Tarjeta de crédito"
+              },
+              {
+                "name": "Transferencia"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Nota",
+          "type": "multilineText"
+        },
+        {
+          "name": "DeudaID",
+          "type": "singleLineText"
+        }
+      ]
+    },
+    "Cuentas": {
+      "schema": [
+        {
+          "name": "ID",
+          "type": "number",
+          "options": {
+            "precision": 0
+          }
+        },
+        {
+          "name": "Nombre",
+          "type": "singleLineText"
+        },
+        {
+          "name": "NumeroCuenta",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Tipo",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Efectivo"
+              },
+              {
+                "name": "Banco"
+              },
+              {
+                "name": "Crédito"
+              },
+              {
+                "name": "Debito"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Moneda",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "PEN"
+              },
+              {
+                "name": "USD"
+              }
+            ]
+          }
+        },
+        {
+          "name": "SaldoActual",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "LímiteCrédito",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "DíaCorte",
+          "type": "number",
+          "options": {
+            "precision": 0
+          }
+        },
+        {
+          "name": "DíaPago",
+          "type": "number",
+          "options": {
+            "precision": 0
+          }
+        }
+      ]
+    },
+    "Categorias": {
+      "schema": [
+        {
+          "name": "Nombre",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Tipo",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Gasto"
+              },
+              {
+                "name": "Ingreso"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Subcategorías",
+          "type": "multilineText"
+        }
+      ]
+    },
+    "Deudas": {
+      "schema": [
+        {
+          "name": "ID",
+          "type": "number",
+          "options": {
+            "precision": 0
+          }
+        },
+        {
+          "name": "Descripcion",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Tipo",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Crédito"
+              },
+              {
+                "name": "Servicio"
+              }
+            ]
+          }
+        },
+        {
+          "name": "MontoTotal",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "Moneda",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "PEN"
+              },
+              {
+                "name": "USD"
+              }
+            ]
+          }
+        },
+        {
+          "name": "MontoPagado",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "FechaVencimiento",
+          "type": "date",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            }
+          }
+        },
+        {
+          "name": "Estado",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Activa"
+              },
+              {
+                "name": "Pagada"
+              },
+              {
+                "name": "Vencida"
+              },
+              {
+                "name": "Programada"
+              }
+            ]
+          }
+        },
+        {
+          "name": "CuentaAsociada",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Periodo",
+          "type": "singleLineText"
+        },
+        {
+          "name": "FechaCorte",
+          "type": "date",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            }
+          }
+        }
+      ]
+    },
+    "MovimientosPendientes": {
+      "schema": [
+        {
+          "name": "ID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "FechaDetectada",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        },
+        {
+          "name": "Fuente",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "GmailPush"
+              },
+              {
+                "name": "ManualTelegram"
+              },
+              {
+                "name": "Manual"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Cuenta",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Tipo",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Gasto"
+              },
+              {
+                "name": "Ingreso"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Monto",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "Moneda",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "PEN"
+              },
+              {
+                "name": "USD"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Descripcion",
+          "type": "multilineText"
+        },
+        {
+          "name": "Referencia",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Estado",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Confirmado"
+              },
+              {
+                "name": "Descartado"
+              },
+              {
+                "name": "Pendiente"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Confianza",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "TXID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "FechaResolucion",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        },
+        {
+          "name": "Observacion",
+          "type": "multilineText"
+        }
+      ]
+    },
+    "GmailEstado": {
+      "schema": [
+        {
+          "name": "Clave",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Valor",
+          "type": "singleLineText"
+        },
+        {
+          "name": "ActualizadoEn",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        }
+      ]
+    },
+    "SaldosHistoricos": {
+      "schema": [
+        {
+          "name": "SnapshotID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "FechaHora",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        },
+        {
+          "name": "Cuenta",
+          "type": "singleLineText"
+        },
+        {
+          "name": "TipoCuenta",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Banco"
+              },
+              {
+                "name": "Crédito"
+              },
+              {
+                "name": "Efectivo"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Moneda",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "PEN"
+              },
+              {
+                "name": "USD"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Saldo",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "SaldoPEN",
+          "type": "number",
+          "options": {
+            "precision": 2
+          }
+        },
+        {
+          "name": "Origen",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "AutoDiario"
+              },
+              {
+                "name": "ManualTelegram"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "seeds": {
+    "Transacciones": [],
+    "Cuentas": [],
+    "Categorias": [
+      {
+        "Nombre": "Educación",
+        "Subcategorías": "Cursos; Libros; Materiales",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Regalos",
+        "Subcategorías": "Cumpleaños; Festividades",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Otros",
+        "Tipo": "Ingreso"
+      },
+      {
+        "Nombre": "Deudas",
+        "Subcategorías": "Pago",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Alimentación",
+        "Subcategorías": "Supermercado; Restaurante; Delivery; Cafetería; Panadería",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Transporte",
+        "Subcategorías": "Gasolina; Taxi; Transporte público; Mantenimiento",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Tecnología",
+        "Subcategorías": "Electrónicos; Software; Reparaciones",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Ocio",
+        "Subcategorías": "Cine;Teatro; Suscripciones; Viajes",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Otros",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Sueldo",
+        "Tipo": "Ingreso"
+      },
+      {
+        "Nombre": "Inversiones",
+        "Subcategorías": "Intereses; Dividendos",
+        "Tipo": "Ingreso"
+      },
+      {
+        "Nombre": "Vivienda",
+        "Subcategorías": "Alquiler; Servicios; Internet",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Salud",
+        "Subcategorías": "Farmacia; Consulta médica; Seguro",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Impuestos",
+        "Tipo": "Gasto"
+      },
+      {
+        "Nombre": "Ropa",
+        "Subcategorías": "Vestimenta; Calzado; Accesorios",
+        "Tipo": "Gasto"
+      }
+    ],
+    "Deudas": [],
+    "MovimientosPendientes": [],
+    "GmailEstado": [],
+    "SaldosHistoricos": []
+  }
+}
