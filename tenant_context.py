@@ -188,3 +188,20 @@ def block_user(telegram_user_id):
         {"Estado": "Bloqueado", "UpdatedAt": now_iso()},
     )
     return True
+
+
+def mark_setup_complete(telegram_user_id, complete=True):
+    user = find_user_by_telegram(telegram_user_id)
+    if not user:
+        raise ValueError(f"No existe usuario {telegram_user_id}.")
+    store = _store()
+    store.update_record(
+        "Usuarios",
+        user["TenantID"],
+        user["_record_id"],
+        {
+            "SetupCompleto": "Si" if complete else "No",
+            "UpdatedAt": now_iso(),
+        },
+    )
+    return resolve_tenant_context(telegram_user_id)

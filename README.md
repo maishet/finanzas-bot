@@ -348,6 +348,7 @@ Comandos admin iniciales:
 - `/admin_users`: lista usuarios registrados.
 - `/admin_block_user <telegram_id>`: bloquea acceso.
 - `/mi_config`: muestra el tenant y estado del usuario actual.
+- `/configurar`: flujo compacto para que un usuario autorizado precargue categorías, cree cuentas, cree deudas y finalice su setup.
 
 La lógica de setup por tenant vive en `tenant_setup_service.py`: precarga categorías, crea cuentas y crea deudas con `TenantID`. Los comandos guiados de configuración inicial deben apoyarse en ese servicio para evitar edición manual en Airtable.
 

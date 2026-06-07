@@ -45,8 +45,13 @@ from tenant_context import (
     is_admin,
     is_authorized_user,
     list_users as tenant_list_users,
+    mark_setup_complete,
     resolve_tenant_context,
 )
+from tenant_setup_service import add_account as tenant_add_account
+from tenant_setup_service import add_debt as tenant_add_debt
+from tenant_setup_service import list_accounts as tenant_list_accounts
+from tenant_setup_service import seed_categories as tenant_seed_categories
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -329,6 +334,122 @@ async def admin_block_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text("❌ Error bloqueando usuario.")
         return
     await update.effective_message.reply_text("✅ Usuario bloqueado.")
+
+
+@restricted
+async def configurar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tenant = resolve_tenant_context(update.effective_user.id)
+    except TenantContextError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+
+    args = list(context.args or [])
+    if not args:
+        await update.effective_message.reply_text(
+            "Configuración inicial\n\n"
+            "Usa un solo comando con estas acciones:\n"
+            "• /configurar categorias\n"
+            "• /configurar cuenta <nombre> <tipo> <moneda> <saldo> [numero]\n"
+            "• /configurar cuentas\n"
+            "• /configurar deuda <descripcion> <tipo> <monto> <moneda> <fecha> <cuenta>\n"
+            "• /configurar finalizar\n\n"
+            "Ejemplos:\n"
+            "/configurar cuenta BCP Banco PEN 1500 2091\n"
+            "/configurar cuenta AMEX Crédito PEN 0 5630\n"
+            "/configurar deuda Tarjeta_AMEX Crédito 0 PEN 2026-06-25 AMEX\n\n"
+            "Gmail y voz están desactivados para usuarios nuevos."
+        )
+        return
+
+    action = args[0].strip().lower()
+    try:
+        if action == "categorias":
+            created = tenant_seed_categories(tenant.tenant_id)
+            await update.effective_message.reply_text(f"✅ Categorías listas. Nuevas creadas: {created}")
+            return
+
+        if action == "cuentas":
+            accounts = tenant_list_accounts(tenant.tenant_id)
+            if not accounts:
+                await update.effective_message.reply_text("No tienes cuentas configuradas.")
+                return
+            lines = ["Cuentas configuradas:"]
+            for account in accounts:
+                lines.append(
+                    f"- {account.get('Nombre', '—')} | {account.get('Tipo', '—')} | "
+                    f"{account.get('Moneda', 'PEN')} {parsear_numero(account.get('SaldoActual', 0)):,.2f}"
+                )
+            await update.effective_message.reply_text("\n".join(lines))
+            return
+
+        if action == "cuenta":
+            if len(args) < 5:
+                await update.effective_message.reply_text(
+                    "Uso: /configurar cuenta <nombre> <tipo> <moneda> <saldo> [numero]"
+                )
+                return
+            account = tenant_add_account(
+                tenant.tenant_id,
+                nombre=args[1].replace("_", " "),
+                tipo=args[2],
+                moneda=args[3],
+                saldo=args[4],
+                numero_cuenta=args[5] if len(args) > 5 else "",
+            )
+            await update.effective_message.reply_text(
+                f"✅ Cuenta creada\n"
+                f"ID: {account['ID']}\n"
+                f"Nombre: {account['Nombre']}\n"
+                f"Tipo: {account['Tipo']}\n"
+                f"Saldo: {account['Moneda']} {account['SaldoActual']:,.2f}"
+            )
+            return
+
+        if action == "deuda":
+            if len(args) < 7:
+                await update.effective_message.reply_text(
+                    "Uso: /configurar deuda <descripcion> <tipo> <monto> <moneda> <fecha> <cuenta>"
+                )
+                return
+            debt = tenant_add_debt(
+                tenant.tenant_id,
+                descripcion=args[1].replace("_", " "),
+                tipo=args[2],
+                monto=args[3],
+                moneda=args[4],
+                fecha_vencimiento=args[5],
+                cuenta_asociada=args[6].replace("_", " "),
+            )
+            await update.effective_message.reply_text(
+                f"✅ Deuda creada\n"
+                f"ID: {debt['ID']}\n"
+                f"Descripción: {debt['Descripcion']}\n"
+                f"Pendiente: {debt['Moneda']} {debt['MontoTotal']:,.2f}\n"
+                f"Vence: {debt['FechaVencimiento']}\n"
+                f"Cuenta: {debt['CuentaAsociada']}"
+            )
+            return
+
+        if action == "finalizar":
+            accounts = tenant_list_accounts(tenant.tenant_id)
+            if not accounts:
+                await update.effective_message.reply_text("❌ Agrega al menos una cuenta antes de finalizar.")
+                return
+            updated = mark_setup_complete(update.effective_user.id, True)
+            await update.effective_message.reply_text(
+                f"✅ Configuración completada\n"
+                f"TenantID: {updated.tenant_id}\n"
+                f"Cuentas: {len(accounts)}"
+            )
+            return
+
+        await update.effective_message.reply_text("Acción no reconocida. Usa /configurar para ver opciones.")
+    except ValueError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error en /configurar: {e}")
+        await update.effective_message.reply_text("❌ Error en configuración inicial.")
 
 def metodo_por_tipo_cuenta(tipo_cuenta):
     tipo_norm = (tipo_cuenta or "").strip().lower()
@@ -1991,6 +2112,7 @@ def main():
                 BotCommand("conciliar", "Conciliar una cuenta"),
                 BotCommand("snapshot", "Guardar snapshot de saldos"),
                 BotCommand("refreshcache", "Refrescar caché de Airtable"),
+                BotCommand("configurar", "Configuración inicial"),
                 BotCommand("mi_config", "Ver configuración del usuario"),
                 BotCommand("admin_users", "Admin: listar usuarios"),
                 BotCommand("admin_add_user", "Admin: autorizar usuario"),
@@ -2027,6 +2149,7 @@ def main():
     app.add_handler(CommandHandler("gmail_token_info", gmail_token_info_cmd))
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("refreshcache", refresh_cache_cmd))
+    app.add_handler(CommandHandler("configurar", configurar_cmd))
     app.add_handler(CommandHandler("mi_config", mi_config_cmd))
     app.add_handler(CommandHandler("admin_users", admin_users_cmd))
     app.add_handler(CommandHandler("admin_add_user", admin_add_user_cmd))
