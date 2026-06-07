@@ -317,6 +317,54 @@ BASE_CURRENCY=PEN
 Este proyecto ya no usa la integración anterior.
 Para operar, solo necesitas el `Base ID` y un token personal de Airtable con permisos sobre la base destino.
 
+### Estado de ramas y Airtable multiusuario
+
+`main` mantiene la estructura operativa monousuario. `develop` contiene la nueva arquitectura multi-tenant sobre una sola base compartida de Airtable.
+
+Antes de pasar `develop` a `main`, Airtable debe prepararse con:
+
+- tablas `Tenants` y `Usuarios`
+- columna `TenantID` en todas las tablas financieras
+- registros actuales del admin rellenados con `TEN_TG_<USER_ID>`
+- campos dinamicos como `Cuenta`, `Categoria`, `CuentaAsociada` y `SaldosHistoricos.Cuenta` configurados como texto, no como select
+
+La guia completa de columnas, tipos y pasos de migracion esta en [docs/airtable-multitenant.md](docs/airtable-multitenant.md).
+
+### Arquitectura multiusuario objetivo
+
+La evolución multiusuario usa una sola base compartida preparada para varios usuarios. Todas las tablas financieras incluyen `TenantID` para separar los datos por espacio de usuario.
+
+Tablas de identidad y control:
+
+- `Tenants`
+- `Usuarios`
+
+Tablas financieras con `TenantID` obligatorio:
+
+- `Transacciones`
+- `Cuentas`
+- `Categorias`
+- `Deudas`
+- `MovimientosPendientes`
+- `GmailEstado`
+- `SaldosHistoricos`
+
+La configuración de usuarios nuevos debe hacerse desde Telegram, no editando Airtable manualmente. El administrador autoriza usuarios y cada usuario configura cuentas, deudas y categorías sin salir del bot.
+
+Gmail Push y voz quedan desactivados para usuarios nuevos (`GmailEnabled=No`, `VoiceEnabled=No`). Los comandos y callbacks de esas funciones verifican esos flags antes de ejecutarse.
+
+La capa `storage/airtable_store.py` centraliza el acceso multi-tenant a Airtable. Sus operaciones financieras requieren `tenant_id` y agregan/verifican `TenantID` para evitar lecturas o escrituras cruzadas entre usuarios.
+
+Comandos admin iniciales:
+
+- `/admin_add_user <telegram_id> <nombre>`: crea tenant y usuario activo con Gmail/Voz desactivados.
+- `/admin_users`: lista usuarios registrados.
+- `/admin_block_user <telegram_id>`: bloquea acceso.
+- `/mi_config`: muestra el tenant y estado del usuario actual.
+- `/configurar`: flujo compacto para que un usuario autorizado precargue categorías, cree cuentas, cree deudas y finalice su setup.
+
+La lógica de setup por tenant vive en `tenant_setup_service.py`: precarga categorías, crea cuentas y crea deudas con `TenantID`. Los comandos guiados de configuración inicial deben apoyarse en ese servicio para evitar edición manual en Airtable.
+
 ## Dependencias
 
 Las principales librerías usadas son:

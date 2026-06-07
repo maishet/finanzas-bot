@@ -38,6 +38,20 @@ from airtable_handler import (obtener_categorias,
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
 from voice_interpreter import interpretar_transcripcion, validar_payload
+from tenant_context import (
+    TenantContextError,
+    block_user as tenant_block_user,
+    create_or_update_user,
+    is_admin,
+    is_authorized_user,
+    list_users as tenant_list_users,
+    mark_setup_complete,
+    resolve_tenant_context,
+)
+from tenant_setup_service import add_account as tenant_add_account
+from tenant_setup_service import add_debt as tenant_add_debt
+from tenant_setup_service import list_accounts as tenant_list_accounts
+from tenant_setup_service import seed_categories as tenant_seed_categories
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -221,11 +235,244 @@ def restricted(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if user_id != config.USER_ID:
+        if not is_authorized_user(user_id):
             await update.effective_message.reply_text("⛔ No estás autorizado para usar este bot.")
             return
         return await func(update, context)
     return wrapper
+
+
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update.effective_user.id):
+            await update.effective_message.reply_text("⛔ Solo el administrador puede usar este comando.")
+            return
+        return await func(update, context)
+    return wrapper
+
+
+def feature_enabled(feature_name, flag_name):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            try:
+                tenant = resolve_tenant_context(update.effective_user.id)
+            except TenantContextError as e:
+                await update.effective_message.reply_text(f"❌ {e}")
+                return
+            if not getattr(tenant, flag_name):
+                await update.effective_message.reply_text(
+                    f"⛔ {feature_name} no está habilitado para tu usuario."
+                )
+                return
+            return await func(update, context)
+        return wrapper
+    return decorator
+
+
+gmail_enabled = feature_enabled("Gmail", "gmail_enabled")
+voice_enabled = feature_enabled("Voz", "voice_enabled")
+
+
+def _fmt_bool(value):
+    return "sí" if bool(value) else "no"
+
+
+@restricted
+async def mi_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tenant = resolve_tenant_context(update.effective_user.id)
+    except TenantContextError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+    await update.effective_message.reply_text(
+        f"Usuario: {tenant.nombre or '—'}\n"
+        f"Telegram ID: {tenant.telegram_user_id}\n"
+        f"TenantID: {tenant.tenant_id}\n"
+        f"Rol: {tenant.rol}\n"
+        f"Setup completo: {_fmt_bool(tenant.setup_completo)}\n"
+        f"Gmail: {_fmt_bool(tenant.gmail_enabled)}\n"
+        f"Voz: {_fmt_bool(tenant.voice_enabled)}"
+    )
+
+
+@admin_only
+async def admin_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        users = tenant_list_users()
+    except Exception as e:
+        logger.error(f"Error listando usuarios: {e}")
+        await update.effective_message.reply_text("❌ Error listando usuarios.")
+        return
+    if not users:
+        await update.effective_message.reply_text("No hay usuarios registrados.")
+        return
+    lines = ["Usuarios:"]
+    for user in users:
+        lines.append(
+            f"- {user['telegram_user_id']} | {user['tenant_id']} | {user['nombre'] or '—'} | "
+            f"{user['estado'] or '—'} | {user['rol'] or '—'} | setup={_fmt_bool(user['setup_completo'])}"
+        )
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+@admin_only
+async def admin_add_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.effective_message.reply_text("Uso: /admin_add_user <telegram_id> <nombre>")
+        return
+    telegram_id = context.args[0]
+    nombre = " ".join(context.args[1:])
+    try:
+        tenant = create_or_update_user(telegram_id, nombre, rol="Owner")
+    except ValueError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.error(f"Error autorizando usuario: {e}")
+        await update.effective_message.reply_text("❌ Error autorizando usuario.")
+        return
+    await update.effective_message.reply_text(
+        f"✅ Usuario autorizado\n"
+        f"TenantID: {tenant.tenant_id}\n"
+        f"Telegram ID: {tenant.telegram_user_id}\n"
+        f"Gmail: No\n"
+        f"Voz: No"
+    )
+
+
+@admin_only
+async def admin_block_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.effective_message.reply_text("Uso: /admin_block_user <telegram_id>")
+        return
+    try:
+        tenant_block_user(context.args[0])
+    except ValueError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.error(f"Error bloqueando usuario: {e}")
+        await update.effective_message.reply_text("❌ Error bloqueando usuario.")
+        return
+    await update.effective_message.reply_text("✅ Usuario bloqueado.")
+
+
+@restricted
+async def configurar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tenant = resolve_tenant_context(update.effective_user.id)
+    except TenantContextError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+
+    args = list(context.args or [])
+    if not args:
+        await update.effective_message.reply_text(
+            "Configuración inicial\n\n"
+            "Usa un solo comando con estas acciones:\n"
+            "• /configurar categorias\n"
+            "• /configurar cuenta <nombre> <tipo> <moneda> <saldo> [numero]\n"
+            "• /configurar cuentas\n"
+            "• /configurar deuda <descripcion> <tipo> <monto> <moneda> <fecha> <cuenta>\n"
+            "• /configurar finalizar\n\n"
+            "Ejemplos:\n"
+            "/configurar cuenta BCP Banco PEN 1500 2091\n"
+            "/configurar cuenta AMEX Crédito PEN 0 5630\n"
+            "/configurar deuda Tarjeta_AMEX Crédito 0 PEN 2026-06-25 AMEX\n\n"
+            "Gmail y voz están desactivados para usuarios nuevos."
+        )
+        return
+
+    action = args[0].strip().lower()
+    try:
+        if action == "categorias":
+            created = tenant_seed_categories(tenant.tenant_id)
+            await update.effective_message.reply_text(f"✅ Categorías listas. Nuevas creadas: {created}")
+            return
+
+        if action == "cuentas":
+            accounts = tenant_list_accounts(tenant.tenant_id)
+            if not accounts:
+                await update.effective_message.reply_text("No tienes cuentas configuradas.")
+                return
+            lines = ["Cuentas configuradas:"]
+            for account in accounts:
+                lines.append(
+                    f"- {account.get('Nombre', '—')} | {account.get('Tipo', '—')} | "
+                    f"{account.get('Moneda', 'PEN')} {parsear_numero(account.get('SaldoActual', 0)):,.2f}"
+                )
+            await update.effective_message.reply_text("\n".join(lines))
+            return
+
+        if action == "cuenta":
+            if len(args) < 5:
+                await update.effective_message.reply_text(
+                    "Uso: /configurar cuenta <nombre> <tipo> <moneda> <saldo> [numero]"
+                )
+                return
+            account = tenant_add_account(
+                tenant.tenant_id,
+                nombre=args[1].replace("_", " "),
+                tipo=args[2],
+                moneda=args[3],
+                saldo=args[4],
+                numero_cuenta=args[5] if len(args) > 5 else "",
+            )
+            await update.effective_message.reply_text(
+                f"✅ Cuenta creada\n"
+                f"ID: {account['ID']}\n"
+                f"Nombre: {account['Nombre']}\n"
+                f"Tipo: {account['Tipo']}\n"
+                f"Saldo: {account['Moneda']} {account['SaldoActual']:,.2f}"
+            )
+            return
+
+        if action == "deuda":
+            if len(args) < 7:
+                await update.effective_message.reply_text(
+                    "Uso: /configurar deuda <descripcion> <tipo> <monto> <moneda> <fecha> <cuenta>"
+                )
+                return
+            debt = tenant_add_debt(
+                tenant.tenant_id,
+                descripcion=args[1].replace("_", " "),
+                tipo=args[2],
+                monto=args[3],
+                moneda=args[4],
+                fecha_vencimiento=args[5],
+                cuenta_asociada=args[6].replace("_", " "),
+            )
+            await update.effective_message.reply_text(
+                f"✅ Deuda creada\n"
+                f"ID: {debt['ID']}\n"
+                f"Descripción: {debt['Descripcion']}\n"
+                f"Pendiente: {debt['Moneda']} {debt['MontoTotal']:,.2f}\n"
+                f"Vence: {debt['FechaVencimiento']}\n"
+                f"Cuenta: {debt['CuentaAsociada']}"
+            )
+            return
+
+        if action == "finalizar":
+            accounts = tenant_list_accounts(tenant.tenant_id)
+            if not accounts:
+                await update.effective_message.reply_text("❌ Agrega al menos una cuenta antes de finalizar.")
+                return
+            updated = mark_setup_complete(update.effective_user.id, True)
+            await update.effective_message.reply_text(
+                f"✅ Configuración completada\n"
+                f"TenantID: {updated.tenant_id}\n"
+                f"Cuentas: {len(accounts)}"
+            )
+            return
+
+        await update.effective_message.reply_text("Acción no reconocida. Usa /configurar para ver opciones.")
+    except ValueError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.error(f"Error en /configurar: {e}")
+        await update.effective_message.reply_text("❌ Error en configuración inicial.")
 
 def metodo_por_tipo_cuenta(tipo_cuenta):
     tipo_norm = (tipo_cuenta or "").strip().lower()
@@ -655,6 +902,7 @@ async def _interpretar_y_confirmar(texto, update: Update, context: ContextTypes.
 
 
 @restricted
+@voice_enabled
 async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not config.VOICE_ENABLED:
         await update.effective_message.reply_text("⚠️ El módulo de voz está desactivado.")
@@ -739,6 +987,7 @@ async def procesar_edicion_voz(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 @restricted
+@voice_enabled
 async def callbacks_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1455,6 +1704,7 @@ async def renovar_watch_gmail_periodico(context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+@gmail_enabled
 async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = iniciar_watch_gmail(force=True)
@@ -1472,6 +1722,7 @@ async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+@gmail_enabled
 async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     estado = obtener_estado_gmail_push_resumido()
     mensaje = (
@@ -1761,6 +2012,7 @@ async def refresh_cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+@gmail_enabled
 async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
@@ -1783,6 +2035,7 @@ async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAU
 
 
 @restricted
+@gmail_enabled
 async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para actualizar el GMAIL_REFRESH_TOKEN sin reiniciar."""
     if not context.args:
@@ -1815,6 +2068,7 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
 
 
 @restricted
+@gmail_enabled
 async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra información del refresh token de Gmail."""
     try:
@@ -1888,6 +2142,11 @@ def main():
                 BotCommand("conciliar", "Conciliar una cuenta"),
                 BotCommand("snapshot", "Guardar snapshot de saldos"),
                 BotCommand("refreshcache", "Refrescar caché de Airtable"),
+                BotCommand("configurar", "Configuración inicial"),
+                BotCommand("mi_config", "Ver configuración del usuario"),
+                BotCommand("admin_users", "Admin: listar usuarios"),
+                BotCommand("admin_add_user", "Admin: autorizar usuario"),
+                BotCommand("admin_block_user", "Admin: bloquear usuario"),
             ]
         )
 
@@ -1920,6 +2179,11 @@ def main():
     app.add_handler(CommandHandler("gmail_token_info", gmail_token_info_cmd))
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("refreshcache", refresh_cache_cmd))
+    app.add_handler(CommandHandler("configurar", configurar_cmd))
+    app.add_handler(CommandHandler("mi_config", mi_config_cmd))
+    app.add_handler(CommandHandler("admin_users", admin_users_cmd))
+    app.add_handler(CommandHandler("admin_add_user", admin_add_user_cmd))
+    app.add_handler(CommandHandler("admin_block_user", admin_block_user_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
     app.add_handler(CallbackQueryHandler(callbacks_pendientes, pattern=r"^pend:"))
