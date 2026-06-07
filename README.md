@@ -342,6 +342,13 @@ Gmail Push y voz quedan desactivados para usuarios nuevos hasta que exista sopor
 
 La capa `storage/airtable_store.py` centraliza el acceso multi-tenant a Airtable. Sus operaciones financieras requieren `tenant_id` y agregan/verifican `TenantID` para evitar lecturas o escrituras cruzadas entre usuarios.
 
+Comandos admin iniciales:
+
+- `/admin_add_user <telegram_id> <nombre>`: crea tenant y usuario activo con Gmail/Voz desactivados.
+- `/admin_users`: lista usuarios registrados.
+- `/admin_block_user <telegram_id>`: bloquea acceso.
+- `/mi_config`: muestra el tenant y estado del usuario actual.
+
 ## Dependencias
 
 Las principales librerías usadas son:

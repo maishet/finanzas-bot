@@ -18,6 +18,7 @@ if not TELEGRAM_TOKEN:
 
 # ID de usuario autorizado (para restringir comandos)
 USER_ID = int(os.getenv("USER_ID", "123456789"))
+ADMIN_TELEGRAM_USER_ID = int(os.getenv("ADMIN_TELEGRAM_USER_ID", str(USER_ID)))
 
 # Airtable como única fuente de datos
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
