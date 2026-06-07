@@ -252,6 +252,29 @@ def admin_only(func):
     return wrapper
 
 
+def feature_enabled(feature_name, flag_name):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            try:
+                tenant = resolve_tenant_context(update.effective_user.id)
+            except TenantContextError as e:
+                await update.effective_message.reply_text(f"❌ {e}")
+                return
+            if not getattr(tenant, flag_name):
+                await update.effective_message.reply_text(
+                    f"⛔ {feature_name} no está habilitado para tu usuario."
+                )
+                return
+            return await func(update, context)
+        return wrapper
+    return decorator
+
+
+gmail_enabled = feature_enabled("Gmail", "gmail_enabled")
+voice_enabled = feature_enabled("Voz", "voice_enabled")
+
+
 def _fmt_bool(value):
     return "sí" if bool(value) else "no"
 
@@ -879,6 +902,7 @@ async def _interpretar_y_confirmar(texto, update: Update, context: ContextTypes.
 
 
 @restricted
+@voice_enabled
 async def procesar_nota_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not config.VOICE_ENABLED:
         await update.effective_message.reply_text("⚠️ El módulo de voz está desactivado.")
@@ -963,6 +987,7 @@ async def procesar_edicion_voz(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 @restricted
+@voice_enabled
 async def callbacks_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1679,6 +1704,7 @@ async def renovar_watch_gmail_periodico(context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+@gmail_enabled
 async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = iniciar_watch_gmail(force=True)
@@ -1696,6 +1722,7 @@ async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+@gmail_enabled
 async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     estado = obtener_estado_gmail_push_resumido()
     mensaje = (
@@ -1985,6 +2012,7 @@ async def refresh_cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @restricted
+@gmail_enabled
 async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
@@ -2007,6 +2035,7 @@ async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAU
 
 
 @restricted
+@gmail_enabled
 async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para actualizar el GMAIL_REFRESH_TOKEN sin reiniciar."""
     if not context.args:
@@ -2039,6 +2068,7 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
 
 
 @restricted
+@gmail_enabled
 async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra información del refresh token de Gmail."""
     try:

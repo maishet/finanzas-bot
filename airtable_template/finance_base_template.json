@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-07T17:44:49.872776+00:00",
+  "generated_at": "2026-06-07T19:50:56.812068+00:00",
   "source": "sanitized_airtable_schema",
   "tables": {
     "Tenants": {
@@ -286,6 +286,12 @@
               },
               {
                 "name": "Transferencia"
+              },
+              {
+                "name": "Efectivo"
+              },
+              {
+                "name": "Tarjeta de Débito"
               }
             ]
           }

@@ -317,9 +317,22 @@ BASE_CURRENCY=PEN
 Este proyecto ya no usa la integración anterior.
 Para operar, solo necesitas el `Base ID` y un token personal de Airtable con permisos sobre la base destino.
 
+### Estado de ramas y Airtable multiusuario
+
+`main` mantiene la estructura operativa monousuario. `develop` contiene la nueva arquitectura multi-tenant sobre una sola base compartida de Airtable.
+
+Antes de pasar `develop` a `main`, Airtable debe prepararse con:
+
+- tablas `Tenants` y `Usuarios`
+- columna `TenantID` en todas las tablas financieras
+- registros actuales del admin rellenados con `TEN_TG_<USER_ID>`
+- campos dinamicos como `Cuenta`, `Categoria`, `CuentaAsociada` y `SaldosHistoricos.Cuenta` configurados como texto, no como select
+
+La guia completa de columnas, tipos y pasos de migracion esta en [docs/airtable-multitenant.md](docs/airtable-multitenant.md).
+
 ### Arquitectura multiusuario objetivo
 
-La evolución multiusuario usará una sola base compartida preparada para varios usuarios. Todas las tablas financieras incluyen `TenantID` para separar los datos por espacio de usuario.
+La evolución multiusuario usa una sola base compartida preparada para varios usuarios. Todas las tablas financieras incluyen `TenantID` para separar los datos por espacio de usuario.
 
 Tablas de identidad y control:
 
@@ -336,9 +349,9 @@ Tablas financieras con `TenantID` obligatorio:
 - `GmailEstado`
 - `SaldosHistoricos`
 
-La configuración de usuarios nuevos debe hacerse desde Telegram, no editando Airtable manualmente. Los siguientes PRs agregarán comandos guiados para que el administrador autorice un usuario y luego configure cuentas, deudas y categorías sin salir del bot.
+La configuración de usuarios nuevos debe hacerse desde Telegram, no editando Airtable manualmente. El administrador autoriza usuarios y cada usuario configura cuentas, deudas y categorías sin salir del bot.
 
-Gmail Push y voz quedan desactivados para usuarios nuevos hasta que exista soporte multi-tenant completo para esas funciones.
+Gmail Push y voz quedan desactivados para usuarios nuevos (`GmailEnabled=No`, `VoiceEnabled=No`). Los comandos y callbacks de esas funciones verifican esos flags antes de ejecutarse.
 
 La capa `storage/airtable_store.py` centraliza el acceso multi-tenant a Airtable. Sus operaciones financieras requieren `tenant_id` y agregan/verifican `TenantID` para evitar lecturas o escrituras cruzadas entre usuarios.
 
