@@ -340,6 +340,8 @@ La configuración de usuarios nuevos debe hacerse desde Telegram, no editando Ai
 
 Gmail Push y voz quedan desactivados para usuarios nuevos hasta que exista soporte multi-tenant completo para esas funciones.
 
+La capa `storage/airtable_store.py` centraliza el acceso multi-tenant a Airtable. Sus operaciones financieras requieren `tenant_id` y agregan/verifican `TenantID` para evitar lecturas o escrituras cruzadas entre usuarios.
+
 ## Dependencias
 
 Las principales librerías usadas son:

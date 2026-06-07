@@ -519,5 +519,19 @@ class AirtableWorkbook:
         return AirtableWorksheet(self.api, title)
 
 
+def create_airtable_api(base_id: str, api_key: str) -> AirtableAPI:
+    base_id = str(base_id or "").strip()
+    api_key = str(api_key or "").strip()
+    if not base_id:
+        raise ValueError("Airtable base_id es obligatorio.")
+    if not api_key:
+        raise ValueError("Airtable api_key es obligatorio.")
+    return AirtableAPI(base_id, api_key)
+
+
+def create_airtable_workbook(base_id: str, api_key: str) -> AirtableWorkbook:
+    return AirtableWorkbook(create_airtable_api(base_id, api_key))
+
+
 api = AirtableAPI(_base_id(), _api_key())
 sheet = AirtableWorkbook(api)
