@@ -38,6 +38,15 @@ from airtable_handler import (obtener_categorias,
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
 from voice_interpreter import interpretar_transcripcion, validar_payload
+from tenant_context import (
+    TenantContextError,
+    block_user as tenant_block_user,
+    create_or_update_user,
+    is_admin,
+    is_authorized_user,
+    list_users as tenant_list_users,
+    resolve_tenant_context,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -221,11 +230,105 @@ def restricted(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if user_id != config.USER_ID:
+        if not is_authorized_user(user_id):
             await update.effective_message.reply_text("⛔ No estás autorizado para usar este bot.")
             return
         return await func(update, context)
     return wrapper
+
+
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update.effective_user.id):
+            await update.effective_message.reply_text("⛔ Solo el administrador puede usar este comando.")
+            return
+        return await func(update, context)
+    return wrapper
+
+
+def _fmt_bool(value):
+    return "sí" if bool(value) else "no"
+
+
+@restricted
+async def mi_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        tenant = resolve_tenant_context(update.effective_user.id)
+    except TenantContextError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+    await update.effective_message.reply_text(
+        f"Usuario: {tenant.nombre or '—'}\n"
+        f"Telegram ID: {tenant.telegram_user_id}\n"
+        f"TenantID: {tenant.tenant_id}\n"
+        f"Rol: {tenant.rol}\n"
+        f"Setup completo: {_fmt_bool(tenant.setup_completo)}\n"
+        f"Gmail: {_fmt_bool(tenant.gmail_enabled)}\n"
+        f"Voz: {_fmt_bool(tenant.voice_enabled)}"
+    )
+
+
+@admin_only
+async def admin_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        users = tenant_list_users()
+    except Exception as e:
+        logger.error(f"Error listando usuarios: {e}")
+        await update.effective_message.reply_text("❌ Error listando usuarios.")
+        return
+    if not users:
+        await update.effective_message.reply_text("No hay usuarios registrados.")
+        return
+    lines = ["Usuarios:"]
+    for user in users:
+        lines.append(
+            f"- {user['telegram_user_id']} | {user['tenant_id']} | {user['nombre'] or '—'} | "
+            f"{user['estado'] or '—'} | {user['rol'] or '—'} | setup={_fmt_bool(user['setup_completo'])}"
+        )
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+@admin_only
+async def admin_add_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.effective_message.reply_text("Uso: /admin_add_user <telegram_id> <nombre>")
+        return
+    telegram_id = context.args[0]
+    nombre = " ".join(context.args[1:])
+    try:
+        tenant = create_or_update_user(telegram_id, nombre, rol="Owner")
+    except ValueError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.error(f"Error autorizando usuario: {e}")
+        await update.effective_message.reply_text("❌ Error autorizando usuario.")
+        return
+    await update.effective_message.reply_text(
+        f"✅ Usuario autorizado\n"
+        f"TenantID: {tenant.tenant_id}\n"
+        f"Telegram ID: {tenant.telegram_user_id}\n"
+        f"Gmail: No\n"
+        f"Voz: No"
+    )
+
+
+@admin_only
+async def admin_block_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.effective_message.reply_text("Uso: /admin_block_user <telegram_id>")
+        return
+    try:
+        tenant_block_user(context.args[0])
+    except ValueError as e:
+        await update.effective_message.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.error(f"Error bloqueando usuario: {e}")
+        await update.effective_message.reply_text("❌ Error bloqueando usuario.")
+        return
+    await update.effective_message.reply_text("✅ Usuario bloqueado.")
 
 def metodo_por_tipo_cuenta(tipo_cuenta):
     tipo_norm = (tipo_cuenta or "").strip().lower()
@@ -1888,6 +1991,10 @@ def main():
                 BotCommand("conciliar", "Conciliar una cuenta"),
                 BotCommand("snapshot", "Guardar snapshot de saldos"),
                 BotCommand("refreshcache", "Refrescar caché de Airtable"),
+                BotCommand("mi_config", "Ver configuración del usuario"),
+                BotCommand("admin_users", "Admin: listar usuarios"),
+                BotCommand("admin_add_user", "Admin: autorizar usuario"),
+                BotCommand("admin_block_user", "Admin: bloquear usuario"),
             ]
         )
 
@@ -1920,6 +2027,10 @@ def main():
     app.add_handler(CommandHandler("gmail_token_info", gmail_token_info_cmd))
     app.add_handler(CommandHandler("snapshot", snapshot_cmd))
     app.add_handler(CommandHandler("refreshcache", refresh_cache_cmd))
+    app.add_handler(CommandHandler("mi_config", mi_config_cmd))
+    app.add_handler(CommandHandler("admin_users", admin_users_cmd))
+    app.add_handler(CommandHandler("admin_add_user", admin_add_user_cmd))
+    app.add_handler(CommandHandler("admin_block_user", admin_block_user_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
     app.add_handler(CallbackQueryHandler(callbacks_pendientes, pattern=r"^pend:"))
