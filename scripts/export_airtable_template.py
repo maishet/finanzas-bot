@@ -12,6 +12,8 @@ PRIVATE_EXPORT_DIR = PROJECT_ROOT / "local_exports"
 TEMPLATE_DIR = PROJECT_ROOT / "airtable_template"
 
 FINANCE_TABLES = [
+    "Tenants",
+    "Usuarios",
     "Transacciones",
     "Cuentas",
     "Categorias",
@@ -23,12 +25,48 @@ FINANCE_TABLES = [
 
 SEED_TABLES = {"Categorias"}
 
+TENANT_FIELD = {"name": "TenantID", "type": "singleLineText"}
+
 FIELD_TYPE_OVERRIDES = {
     ("Transacciones", "Categoría"): {"type": "singleLineText"},
     ("Transacciones", "Cuenta"): {"type": "singleLineText"},
     ("Deudas", "CuentaAsociada"): {"type": "singleLineText"},
     ("MovimientosPendientes", "Cuenta"): {"type": "singleLineText"},
     ("SaldosHistoricos", "Cuenta"): {"type": "singleLineText"},
+}
+
+STATIC_TABLE_SCHEMAS = {
+    "Tenants": [
+        {"name": "TenantID", "type": "singleLineText"},
+        {"name": "Nombre", "type": "singleLineText"},
+        {"name": "Estado", "type": "singleSelect", "options": {"choices": [{"name": "Activo"}, {"name": "Pendiente"}, {"name": "Bloqueado"}]}},
+        {"name": "Plan", "type": "singleSelect", "options": {"choices": [{"name": "Personal"}, {"name": "Free"}, {"name": "Pro"}]}},
+        {"name": "CreatedAt", "type": "dateTime", "options": {"dateFormat": {"name": "iso", "format": "YYYY-MM-DD"}, "timeFormat": {"name": "24hour", "format": "HH:mm"}, "timeZone": "client"}},
+        {"name": "UpdatedAt", "type": "dateTime", "options": {"dateFormat": {"name": "iso", "format": "YYYY-MM-DD"}, "timeFormat": {"name": "24hour", "format": "HH:mm"}, "timeZone": "client"}},
+    ],
+    "Usuarios": [
+        {"name": "UserID", "type": "singleLineText"},
+        {"name": "TenantID", "type": "singleLineText"},
+        {"name": "TelegramUserID", "type": "singleLineText"},
+        {"name": "Nombre", "type": "singleLineText"},
+        {"name": "Estado", "type": "singleSelect", "options": {"choices": [{"name": "Pendiente"}, {"name": "Activo"}, {"name": "Bloqueado"}]}},
+        {"name": "Rol", "type": "singleSelect", "options": {"choices": [{"name": "Admin"}, {"name": "Owner"}, {"name": "Member"}]}},
+        {"name": "SetupCompleto", "type": "singleSelect", "options": {"choices": [{"name": "No"}, {"name": "Si"}]}},
+        {"name": "GmailEnabled", "type": "singleSelect", "options": {"choices": [{"name": "No"}, {"name": "Si"}]}},
+        {"name": "VoiceEnabled", "type": "singleSelect", "options": {"choices": [{"name": "No"}, {"name": "Si"}]}},
+        {"name": "CreatedAt", "type": "dateTime", "options": {"dateFormat": {"name": "iso", "format": "YYYY-MM-DD"}, "timeFormat": {"name": "24hour", "format": "HH:mm"}, "timeZone": "client"}},
+        {"name": "UpdatedAt", "type": "dateTime", "options": {"dateFormat": {"name": "iso", "format": "YYYY-MM-DD"}, "timeFormat": {"name": "24hour", "format": "HH:mm"}, "timeZone": "client"}},
+    ],
+}
+
+TENANT_SCOPED_TABLES = {
+    "Transacciones",
+    "Cuentas",
+    "Categorias",
+    "Deudas",
+    "MovimientosPendientes",
+    "GmailEstado",
+    "SaldosHistoricos",
 }
 
 
@@ -109,6 +147,14 @@ def public_field_def(table_name, field):
     return clean
 
 
+def ensure_tenant_field(table_name, fields):
+    if table_name not in TENANT_SCOPED_TABLES:
+        return fields
+    if any(field.get("name") == "TenantID" for field in fields):
+        return fields
+    return [TENANT_FIELD] + fields
+
+
 def public_record(record):
     return dict(record.get("fields", {}))
 
@@ -140,9 +186,13 @@ def main():
     for table_name in FINANCE_TABLES:
         table_meta = tables_by_name.get(table_name)
         if not table_meta:
+            if table_name in STATIC_TABLE_SCHEMAS:
+                clean_template["tables"][table_name] = {"schema": STATIC_TABLE_SCHEMAS[table_name]}
+                clean_template["seeds"][table_name] = []
             continue
 
         fields = [public_field_def(table_name, field) for field in table_meta.get("fields", [])]
+        fields = ensure_tenant_field(table_name, fields)
         records = list_records(base_id, api_key, table_name)
 
         private_export["tables"][table_name] = {

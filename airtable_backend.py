@@ -24,13 +24,15 @@ class WorksheetNotFound(Exception):
 
 
 DEFAULT_HEADERS = {
-    "Transacciones": ["ID", "Fecha", "Tipo", "Monto", "Moneda", "Categoría", "Subcategoría", "Cuenta", "Método", "Nota", "DeudaID"],
-    "Cuentas": ["ID", "Nombre", "NumeroCuenta", "Tipo", "Moneda", "SaldoActual", "LímiteCrédito", "DíaCorte", "DíaPago"],
-    "Categorias": ["Nombre", "Tipo", "Subcategorías"],
-    "Deudas": ["ID", "Descripcion", "Tipo", "MontoTotal", "Moneda", "MontoPagado", "FechaVencimiento", "Estado", "CuentaAsociada", "Periodo", "FechaCorte"],
-    "MovimientosPendientes": ["ID", "FechaDetectada", "Fuente", "Cuenta", "Tipo", "Monto", "Moneda", "Descripcion", "Referencia", "Estado", "Confianza", "TXID", "FechaResolucion", "Observacion"],
-    "GmailEstado": ["Clave", "Valor", "ActualizadoEn"],
-    "SaldosHistoricos": ["SnapshotID", "FechaHora", "Cuenta", "TipoCuenta", "Moneda", "Saldo", "SaldoPEN", "Origen"],
+    "Tenants": ["TenantID", "Nombre", "Estado", "Plan", "CreatedAt", "UpdatedAt"],
+    "Usuarios": ["UserID", "TenantID", "TelegramUserID", "Nombre", "Estado", "Rol", "SetupCompleto", "GmailEnabled", "VoiceEnabled", "CreatedAt", "UpdatedAt"],
+    "Transacciones": ["TenantID", "ID", "Fecha", "Tipo", "Monto", "Moneda", "Categoría", "Subcategoría", "Cuenta", "Método", "Nota", "DeudaID"],
+    "Cuentas": ["TenantID", "ID", "Nombre", "NumeroCuenta", "Tipo", "Moneda", "SaldoActual", "LímiteCrédito", "DíaCorte", "DíaPago"],
+    "Categorias": ["TenantID", "Nombre", "Tipo", "Subcategorías"],
+    "Deudas": ["TenantID", "ID", "Descripcion", "Tipo", "MontoTotal", "Moneda", "MontoPagado", "FechaVencimiento", "Estado", "CuentaAsociada", "Periodo", "FechaCorte"],
+    "MovimientosPendientes": ["TenantID", "ID", "FechaDetectada", "Fuente", "Cuenta", "Tipo", "Monto", "Moneda", "Descripcion", "Referencia", "Estado", "Confianza", "TXID", "FechaResolucion", "Observacion"],
+    "GmailEstado": ["TenantID", "Clave", "Valor", "ActualizadoEn"],
+    "SaldosHistoricos": ["TenantID", "SnapshotID", "FechaHora", "Cuenta", "TipoCuenta", "Moneda", "Saldo", "SaldoPEN", "Origen"],
 }
 
 
@@ -79,7 +81,29 @@ def _schema_headers(fields: List[Dict[str, Any]]) -> List[str]:
 
 
 DEFAULT_FIELD_DEFS = {
+    "Tenants": [
+        _text("TenantID"),
+        _text("Nombre"),
+        _single_select("Estado", ["Activo", "Pendiente", "Bloqueado"]),
+        _single_select("Plan", ["Personal", "Free", "Pro"]),
+        _datetime("CreatedAt"),
+        _datetime("UpdatedAt"),
+    ],
+    "Usuarios": [
+        _text("UserID"),
+        _text("TenantID"),
+        _text("TelegramUserID"),
+        _text("Nombre"),
+        _single_select("Estado", ["Pendiente", "Activo", "Bloqueado"]),
+        _single_select("Rol", ["Admin", "Owner", "Member"]),
+        _single_select("SetupCompleto", ["No", "Si"]),
+        _single_select("GmailEnabled", ["No", "Si"]),
+        _single_select("VoiceEnabled", ["No", "Si"]),
+        _datetime("CreatedAt"),
+        _datetime("UpdatedAt"),
+    ],
     "Transacciones": [
+        _text("TenantID"),
         _text("ID"),
         _datetime("Fecha"),
         _single_select("Tipo", ["Gasto", "Ingreso"]),
@@ -93,6 +117,7 @@ DEFAULT_FIELD_DEFS = {
         _text("DeudaID"),
     ],
     "Cuentas": [
+        _text("TenantID"),
         _text("ID"),
         _text("Nombre"),
         _text("NumeroCuenta"),
@@ -104,11 +129,13 @@ DEFAULT_FIELD_DEFS = {
         _integer("DíaPago"),
     ],
     "Categorias": [
+        _text("TenantID"),
         _text("Nombre"),
         _single_select("Tipo", ["Gasto", "Ingreso"]),
         _multiline("Subcategorías"),
     ],
     "Deudas": [
+        _text("TenantID"),
         _text("ID"),
         _text("Descripcion"),
         _single_select("Tipo", ["Credito", "Crédito", "Servicio"]),
@@ -122,6 +149,7 @@ DEFAULT_FIELD_DEFS = {
         _date("FechaCorte"),
     ],
     "MovimientosPendientes": [
+        _text("TenantID"),
         _text("ID"),
         _datetime("FechaDetectada"),
         _single_select("Fuente", ["GmailPush", "ManualTelegram", "Manual"]),
@@ -138,11 +166,13 @@ DEFAULT_FIELD_DEFS = {
         _multiline("Observacion"),
     ],
     "GmailEstado": [
+        _text("TenantID"),
         _text("Clave"),
         _text("Valor"),
         _datetime("ActualizadoEn"),
     ],
     "SaldosHistoricos": [
+        _text("TenantID"),
         _text("SnapshotID"),
         _datetime("FechaHora"),
         _text("Cuenta"),
@@ -197,6 +227,13 @@ TEXT_FIELDS = {
     "SaldoPEN",
     "Origen",
     "SaldoActual",
+    "TenantID",
+    "UserID",
+    "TelegramUserID",
+    "Rol",
+    "Plan",
+    "CreatedAt",
+    "UpdatedAt",
 }
 
 

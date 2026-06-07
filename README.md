@@ -317,6 +317,29 @@ BASE_CURRENCY=PEN
 Este proyecto ya no usa la integración anterior.
 Para operar, solo necesitas el `Base ID` y un token personal de Airtable con permisos sobre la base destino.
 
+### Arquitectura multiusuario objetivo
+
+La evolución multiusuario usará una sola base compartida preparada para varios usuarios. Todas las tablas financieras incluyen `TenantID` para separar los datos por espacio de usuario.
+
+Tablas de identidad y control:
+
+- `Tenants`
+- `Usuarios`
+
+Tablas financieras con `TenantID` obligatorio:
+
+- `Transacciones`
+- `Cuentas`
+- `Categorias`
+- `Deudas`
+- `MovimientosPendientes`
+- `GmailEstado`
+- `SaldosHistoricos`
+
+La configuración de usuarios nuevos debe hacerse desde Telegram, no editando Airtable manualmente. Los siguientes PRs agregarán comandos guiados para que el administrador autorice un usuario y luego configure cuentas, deudas y categorías sin salir del bot.
+
+Gmail Push y voz quedan desactivados para usuarios nuevos hasta que exista soporte multi-tenant completo para esas funciones.
+
 ## Dependencias
 
 Las principales librerías usadas son:
