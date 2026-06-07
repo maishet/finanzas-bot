@@ -91,12 +91,11 @@ _SHEET_CACHE = {}
 _CACHE_TTL_SECONDS = 10
 
 
-def _default_tenant_id():
-    return f"TEN_TG_{config.ADMIN_TELEGRAM_USER_ID}"
-
-
-def _resolve_tenant_id(tenant_id=None):
-    return str(tenant_id or _default_tenant_id()).strip()
+def _require_tenant_id(tenant_id):
+    tenant_id = str(tenant_id or "").strip()
+    if not tenant_id:
+        raise ValueError("tenant_id es obligatorio para acceder a datos financieros.")
+    return tenant_id
 
 
 def _headers(worksheet):
@@ -106,7 +105,7 @@ def _headers(worksheet):
 def _fields_with_tenant(worksheet, fields, tenant_id=None):
     payload = dict(fields or {})
     if "TenantID" in _headers(worksheet):
-        payload["TenantID"] = _resolve_tenant_id(tenant_id)
+        payload["TenantID"] = _require_tenant_id(tenant_id)
     return payload
 
 
@@ -114,10 +113,14 @@ def _row_with_tenant(worksheet, values, tenant_id=None):
     headers = _headers(worksheet)
     if "TenantID" not in headers:
         return list(values)
-    fields = {"TenantID": _resolve_tenant_id(tenant_id)}
+    fields = {"TenantID": _require_tenant_id(tenant_id)}
     for header, value in zip([h for h in headers if h != "TenantID"], values):
         fields[header] = value
     return [fields.get(header, "") for header in headers]
+
+
+def _tenant_cache_key(cache_key, tenant_id=None):
+    return f"{cache_key}:{tenant_id}" if tenant_id else cache_key
 
 
 def _cache_get(key):
@@ -153,19 +156,42 @@ def refrescar_cache_general():
         logger.warning(f"No se pudo refrescar cache de metadata Airtable: {exc}")
 
 
-def _leer_records_cacheados(worksheet, cache_key):
-    valor = _cache_get(cache_key)
+def _leer_records_cacheados(worksheet, cache_key, tenant_id=None):
+    headers = _headers(worksheet)
+    if "TenantID" in headers:
+        tenant_id = _require_tenant_id(tenant_id)
+    effective_cache_key = _tenant_cache_key(cache_key, tenant_id)
+    valor = _cache_get(effective_cache_key)
     if valor is not None:
         return valor
 
-    return _cache_set(cache_key, worksheet.get_all_records())
+    records = worksheet.get_all_records()
+    if tenant_id:
+        records = [r for r in records if str(r.get("TenantID", "")).strip() == tenant_id]
+    return _cache_set(effective_cache_key, records)
 
 
-def _leer_values_cacheados(worksheet, cache_key):
-    valor = _cache_get(cache_key)
+def _leer_values_cacheados(worksheet, cache_key, tenant_id=None):
+    headers_meta = _headers(worksheet)
+    if "TenantID" in headers_meta:
+        tenant_id = _require_tenant_id(tenant_id)
+    effective_cache_key = _tenant_cache_key(cache_key, tenant_id)
+    valor = _cache_get(effective_cache_key)
     if valor is not None:
         return valor
-    return _cache_set(cache_key, worksheet.get_all_values())
+
+    values = worksheet.get_all_values()
+    if tenant_id and values:
+        headers = values[0]
+        try:
+            tenant_idx = headers.index("TenantID")
+            values = [headers] + [
+                row for row in values[1:]
+                if len(row) > tenant_idx and str(row[tenant_idx]).strip() == tenant_id
+            ]
+        except ValueError:
+            pass
+    return _cache_set(effective_cache_key, values)
 
 
 def _leer_registros_cacheados_formateado(nombre_hoja, cache_key):
@@ -418,7 +444,7 @@ def obtener_siguiente_id(worksheet, prefix="TX"):
         if max_num > 0:
             return max_num + 1
 
-        # Fallback legacy: correlativo por cantidad de filas con datos
+        # Fallback de compatibilidad: correlativo por cantidad de filas con datos.
         data_rows = sum(1 for v in col_a[1:] if str(v or "").strip())
         return max(1, data_rows + 1)
     except Exception as e:
@@ -439,8 +465,8 @@ def convertir_a_pen(monto, moneda):
         raise ValueError(f"Moneda no soportada: {moneda}")
 
 
-def _metodo_por_cuenta(nombre_cuenta):
-    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta) or "")
+def _metodo_por_cuenta(nombre_cuenta, tenant_id=None):
+    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta, tenant_id=tenant_id) or "")
     if tipo in ["credito", "debito"]:
         return "Tarjeta de crédito"
     if tipo == "banco":
@@ -506,6 +532,7 @@ def registrar_movimiento_pendiente(
     tenant_id=None,
 ):
     """Registra un movimiento detectado para confirmación posterior."""
+    tenant_id = _require_tenant_id(tenant_id)
     tipo_norm = normalizar_texto(tipo)
     if tipo_norm not in ["ingreso", "gasto"]:
         raise ValueError("Tipo inválido. Usa Ingreso o Gasto.")
@@ -514,7 +541,7 @@ def registrar_movimiento_pendiente(
     if monto_num <= 0:
         raise ValueError("El monto pendiente debe ser mayor a 0.")
 
-    cuenta_info = obtener_cuenta_por_nombre(cuenta)
+    cuenta_info = obtener_cuenta_por_nombre(cuenta, tenant_id=tenant_id)
     if not cuenta_info:
         raise ValueError(f"Cuenta '{cuenta}' no existe.")
 
@@ -545,12 +572,12 @@ def registrar_movimiento_pendiente(
 
 
 def listar_movimientos_pendientes(limit=20, include_resueltos=False, tenant_id=None):
-    valores = _leer_values_cacheados(pend_ws, "pendientes_values")
+    valores = _leer_values_cacheados(pend_ws, "pendientes_values", tenant_id=tenant_id)
     if not valores or len(valores) <= 1:
         return []
 
     headers = valores[0]
-    tenant_id = _resolve_tenant_id(tenant_id) if "TenantID" in headers else None
+    tenant_id = _require_tenant_id(tenant_id) if "TenantID" in headers else None
     filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)]
     if tenant_id:
         filas = [f for f in filas if str(f.get("TenantID", "")).strip() == tenant_id]
@@ -615,12 +642,12 @@ def _buscar_pendiente_por_id(pendiente_id, tenant_id=None):
     if not pid:
         return None
 
-    valores = _leer_values_cacheados(pend_ws, "pendientes_values")
+    valores = _leer_values_cacheados(pend_ws, "pendientes_values", tenant_id=tenant_id)
     if not valores or len(valores) <= 1:
         return None
 
     headers = valores[0]
-    tenant_id = _resolve_tenant_id(tenant_id) if "TenantID" in headers else None
+    tenant_id = _require_tenant_id(tenant_id) if "TenantID" in headers else None
     for i, fila in enumerate(valores[1:], start=2):
         reg = dict(zip(headers, fila))
         if tenant_id and str(reg.get("TenantID", "")).strip() != tenant_id:
@@ -654,7 +681,7 @@ def _extraer_deuda_id_desde_texto(*textos):
     return ""
 
 
-def _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos):
+def _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos, tenant_id=None):
     """Retorna candidatas de deuda Servicio rankeadas por match de descripción + monto exacto.
 
     Reglas duras:
@@ -681,7 +708,7 @@ def _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos):
     contexto = normalizar_texto(" | ".join([str(t or "") for t in textos]))
     contexto_tokens = set(re.findall(r"[a-z0-9]{4,}", contexto))
 
-    deudas = obtener_deudas_con_fila()
+    deudas = obtener_deudas_con_fila(tenant_id=tenant_id)
     candidatos = []
     for d in deudas:
         if normalizar_texto(d.get("Tipo", "")) != "servicio":
@@ -724,7 +751,7 @@ def _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos):
     return candidatos
 
 
-def obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3):
+def obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3, tenant_id=None):
     if not pendiente_obj:
         return []
     cuenta = str(pendiente_obj.get("Cuenta", "") or "").strip()
@@ -734,7 +761,7 @@ def obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3)
     referencia = str(pendiente_obj.get("Referencia", "") or "")
     observacion = str(pendiente_obj.get("Observacion", "") or "")
 
-    candidatos = _rankear_deudas_servicio(cuenta, monto, moneda, descripcion, referencia, observacion)
+    candidatos = _rankear_deudas_servicio(cuenta, monto, moneda, descripcion, referencia, observacion, tenant_id=tenant_id)
     salida = []
     for score, _, _, d, pago_conv, pendiente in candidatos[: max(1, int(max_items))]:
         salida.append({
@@ -748,14 +775,14 @@ def obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3)
     return salida
 
 
-def _buscar_deuda_servicio_por_contexto(cuenta_banco, monto, moneda, *textos):
+def _buscar_deuda_servicio_por_contexto(cuenta_banco, monto, moneda, *textos, tenant_id=None):
     """Intenta detectar automáticamente deuda de tipo Servicio a partir del contexto.
 
     Regla adicional anti-falsos-positivos:
     - Solo auto-confirma si hay al menos 1 token compartido entre
       contexto del pendiente y descripción de la deuda en Airtable (score >= 1).
     """
-    candidatos = _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos)
+    candidatos = _rankear_deudas_servicio(cuenta_banco, monto, moneda, *textos, tenant_id=tenant_id)
     if not candidatos:
         return None
 
@@ -768,6 +795,7 @@ def _buscar_deuda_servicio_por_contexto(cuenta_banco, monto, moneda, *textos):
 
 def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="", tenant_id=None):
     """Convierte un pendiente en transacción real y marca su resolución."""
+    tenant_id = _require_tenant_id(tenant_id)
     p = _buscar_pendiente_por_id(pendiente_id, tenant_id=tenant_id)
     if not p:
         raise ValueError(f"No existe pendiente '{pendiente_id}'.")
@@ -795,8 +823,8 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
 
     # Caso 1: usuario indica explícitamente el ID de deuda (ej. categoria "deuda:12").
     deuda_id_explicita = _extraer_deuda_id_desde_texto(categoria_input, nota_extra, texto_contexto)
-    if not tx_id and deuda_id_explicita and es_cuenta_banco(cuenta):
-        deuda_obj = obtener_deuda_por_id(deuda_id_explicita)
+    if not tx_id and deuda_id_explicita and es_cuenta_banco(cuenta, tenant_id=tenant_id):
+        deuda_obj = obtener_deuda_por_id(deuda_id_explicita, tenant_id=tenant_id)
         if deuda_obj:
             pago_res = pagar_deuda(
                 str(deuda_obj.get("ID", "")).strip(),
@@ -811,7 +839,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
             categoria_input = "Deudas"
 
     # Caso 1.5: detección automática de pago de deuda de servicio desde cuenta banco.
-    if not tx_id and es_cuenta_banco(cuenta):
+    if not tx_id and es_cuenta_banco(cuenta, tenant_id=tenant_id):
         deuda_servicio = _buscar_deuda_servicio_por_contexto(
             cuenta,
             monto,
@@ -821,6 +849,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
             observacion,
             nota_extra,
             categoria_input,
+            tenant_id=tenant_id,
         )
         if deuda_servicio:
             pago_res = pagar_deuda(
@@ -844,12 +873,12 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
 
         if not cuenta_destino:
             # Fallback: si el texto trae alguna cuenta crédito, usarla.
-            cuenta_destino_detectada = detectar_cuenta_en_texto(texto_contexto)
-            if cuenta_destino_detectada and es_cuenta_credito(cuenta_destino_detectada.get("Nombre", "")):
+            cuenta_destino_detectada = detectar_cuenta_en_texto(texto_contexto, tenant_id=tenant_id)
+            if cuenta_destino_detectada and es_cuenta_credito(cuenta_destino_detectada.get("Nombre", ""), tenant_id=tenant_id):
                 cuenta_destino = cuenta_destino_detectada.get("Nombre", "")
 
-        deuda_obj = obtener_deuda_activa_por_cuenta(cuenta_destino) if cuenta_destino else None
-        if deuda_obj and cuenta_origen and es_cuenta_banco(cuenta_origen):
+        deuda_obj = obtener_deuda_activa_por_cuenta(cuenta_destino, tenant_id=tenant_id) if cuenta_destino else None
+        if deuda_obj and cuenta_origen and es_cuenta_banco(cuenta_origen, tenant_id=tenant_id):
             pago_res = pagar_deuda(
                 str(deuda_obj.get("ID", "")).strip(),
                 monto,
@@ -865,20 +894,20 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
 
     # Flujo tradicional: si el pendiente cayó como gasto sobre una tarjeta de crédito,
     # intentamos resolverlo como pago de deuda usando la cuenta asociada.
-    if not tx_id and es_cuenta_credito(cuenta):
+    if not tx_id and es_cuenta_credito(cuenta, tenant_id=tenant_id):
         desc_norm = normalizar_texto(f"{descripcion} {observacion}")
         if "pago" in desc_norm or "tarjeta" in desc_norm:
-            deuda = obtener_deuda_activa_por_cuenta(cuenta)
+            deuda = obtener_deuda_activa_por_cuenta(cuenta, tenant_id=tenant_id)
             if deuda:
                 source_account = None
                 for suf in re.findall(r"(\d{4})", f"{descripcion} {observacion}"):
-                    cand = detectar_cuenta_por_ultimos_digitos(suf)
-                    if cand and es_cuenta_banco(cand.get("Nombre", "")):
+                    cand = detectar_cuenta_por_ultimos_digitos(suf, tenant_id=tenant_id)
+                    if cand and es_cuenta_banco(cand.get("Nombre", ""), tenant_id=tenant_id):
                         source_account = cand.get("Nombre")
                         break
                 if not source_account:
                     source_account = deuda.get("CuentaAsociada")
-                if source_account and es_cuenta_banco(source_account):
+                if source_account and es_cuenta_banco(source_account, tenant_id=tenant_id):
                     pago_res = pagar_deuda(str(deuda.get("ID", "")).strip(), monto, moneda, source_account, nota, tenant_id=tenant_id)
                     tx_id = pago_res.get("trans_id")
                     cuenta = source_account
@@ -892,7 +921,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
             categoria_input=categoria_input,
             subcategoria="",
             cuenta=cuenta,
-            metodo=_metodo_por_cuenta(cuenta),
+            metodo=_metodo_por_cuenta(cuenta, tenant_id=tenant_id),
             nota=nota,
             tenant_id=tenant_id,
         )
@@ -949,8 +978,8 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
     }
 
 
-def descartar_movimiento_pendiente(pendiente_id, motivo=""):
-    p = _buscar_pendiente_por_id(pendiente_id)
+def descartar_movimiento_pendiente(pendiente_id, motivo="", tenant_id=None):
+    p = _buscar_pendiente_por_id(pendiente_id, tenant_id=tenant_id)
     if not p:
         raise ValueError(f"No existe pendiente '{pendiente_id}'.")
 
@@ -972,10 +1001,10 @@ def descartar_movimiento_pendiente(pendiente_id, motivo=""):
     return {"pendiente_id": str(p.get("ID", pendiente_id)).strip(), "motivo": motivo}
 
 
-def sugerir_pendientes_por_diferencia(cuenta, diferencia_pen, max_items=5):
+def sugerir_pendientes_por_diferencia(cuenta, diferencia_pen, max_items=5, tenant_id=None):
     """Retorna candidatos pendientes cercanos a la diferencia detectada."""
     cuenta_norm = normalizar_texto(cuenta)
-    pendientes = listar_movimientos_pendientes(limit=200)
+    pendientes = listar_movimientos_pendientes(limit=200, tenant_id=tenant_id)
     if not pendientes:
         return []
 
@@ -1011,14 +1040,14 @@ def sugerir_pendientes_por_diferencia(cuenta, diferencia_pen, max_items=5):
     return candidatos[: max(1, int(max_items))]
 
 
-def conciliar_cuenta(cuenta, saldo_real, moneda_real="PEN"):
+def conciliar_cuenta(cuenta, saldo_real, moneda_real="PEN", tenant_id=None):
     """Compara saldo real con saldo hoja y propone pendientes cercanos a la diferencia."""
-    cuenta_info = obtener_cuenta_por_nombre(cuenta)
+    cuenta_info = obtener_cuenta_por_nombre(cuenta, tenant_id=tenant_id)
     if not cuenta_info:
         raise ValueError(f"Cuenta '{cuenta}' no existe.")
 
     cuenta_nombre = cuenta_info["Nombre"]
-    saldo_hoja_pen = obtener_saldo_actual_cuenta(cuenta_nombre)
+    saldo_hoja_pen = obtener_saldo_actual_cuenta(cuenta_nombre, tenant_id=tenant_id)
     if saldo_hoja_pen is None:
         raise ValueError(f"No se pudo obtener saldo de la cuenta '{cuenta_nombre}'.")
 
@@ -1026,7 +1055,7 @@ def conciliar_cuenta(cuenta, saldo_real, moneda_real="PEN"):
     saldo_real_pen = convertir_a_pen(saldo_real_num, moneda_real)
     diferencia_pen = round(saldo_real_pen - saldo_hoja_pen, 2)
 
-    sugerencias = sugerir_pendientes_por_diferencia(cuenta_nombre, diferencia_pen, max_items=5)
+    sugerencias = sugerir_pendientes_por_diferencia(cuenta_nombre, diferencia_pen, max_items=5, tenant_id=tenant_id)
 
     return {
         "cuenta": cuenta_nombre,
@@ -1037,9 +1066,9 @@ def conciliar_cuenta(cuenta, saldo_real, moneda_real="PEN"):
     }
 
 # ---------- CATEGORÍAS Y SUBCATEGORÍAS ----------
-def obtener_categorias(tipo=None):
+def obtener_categorias(tipo=None, tenant_id=None):
     """Obtiene todas las categorías con sus subcategorías"""
-    registros = _leer_records_cacheados(categorias_ws, "categorias_records")
+    registros = _leer_records_cacheados(categorias_ws, "categorias_records", tenant_id=tenant_id)
     resultado = []
     for c in registros:
         nombre_original = c["Nombre"]
@@ -1053,13 +1082,13 @@ def obtener_categorias(tipo=None):
             })
     return resultado
 
-def obtener_mapeo_subcategorias(tipo=None):
+def obtener_mapeo_subcategorias(tipo=None, tenant_id=None):
     """
     Retorna un diccionario: {subcategoria_normalizada: categoria_original}
     para todas las subcategorías definidas.
     """
     mapeo = {}
-    categorias = obtener_categorias(tipo)
+    categorias = obtener_categorias(tipo, tenant_id=tenant_id)
     for cat in categorias:
         subs = cat["subcategorias"]
         if subs and subs.strip():
@@ -1070,7 +1099,7 @@ def obtener_mapeo_subcategorias(tipo=None):
                     mapeo[sub_norm] = cat["original"]
     return mapeo
 
-def resolver_categoria(input_text, tipo):
+def resolver_categoria(input_text, tipo, tenant_id=None):
     """
     Dado un texto de entrada, determina si es categoría principal o subcategoría.
     Retorna una tupla: (categoria_original, subcategoria_original_o_vacia)
@@ -1079,13 +1108,13 @@ def resolver_categoria(input_text, tipo):
     input_norm = normalizar_texto(input_text)
     
     # 1. Buscar como categoría principal
-    categorias = obtener_categorias(tipo)
+    categorias = obtener_categorias(tipo, tenant_id=tenant_id)
     for cat in categorias:
         if cat["normalizado"] == input_norm:
             return (cat["original"], "")
     
     # 2. Buscar como subcategoría
-    mapeo_subs = obtener_mapeo_subcategorias(tipo)
+    mapeo_subs = obtener_mapeo_subcategorias(tipo, tenant_id=tenant_id)
     if input_norm in mapeo_subs:
         cat_original = mapeo_subs[input_norm]
         # El nombre original de la subcategoría lo recuperamos del mapeo inverso
@@ -1096,15 +1125,15 @@ def resolver_categoria(input_text, tipo):
     sugerencias = [c["original"] for c in categorias[:5]]
     raise ValueError(f"'{input_text}' no es categoría ni subcategoría válida. Sugerencias: {', '.join(sugerencias)}")
 
-def validar_categoria(categoria_input, tipo):
-    """Versión legacy que solo devuelve categoría principal (usada internamente)"""
-    cat, _ = resolver_categoria(categoria_input, tipo)
+def validar_categoria(categoria_input, tipo, tenant_id=None):
+    """Devuelve la categoría principal validada para uso interno."""
+    cat, _ = resolver_categoria(categoria_input, tipo, tenant_id=tenant_id)
     return cat
 
 # ---------- CUENTAS ----------
-def obtener_nombres_cuentas():
+def obtener_nombres_cuentas(tenant_id=None):
     try:
-        registros = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+        registros = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
         return [c["Nombre"] for c in registros]
     except Exception as e:
         logger.error(f"Error obteniendo nombres de cuentas: {e}")
@@ -1135,14 +1164,14 @@ def _identificadores_cuenta(cuenta):
     return ids
 
 
-def detectar_cuenta_por_ultimos_digitos(ultimos4):
+def detectar_cuenta_por_ultimos_digitos(ultimos4, tenant_id=None):
     """Busca cuenta en hoja Cuentas por últimos 4 dígitos de cuenta/tarjeta."""
     suf = _normalizar_digitos(ultimos4)
     if len(suf) < 4:
         return None
     suf = suf[-4:]
 
-    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     for i, c in enumerate(cuentas, start=2):
         ids = _identificadores_cuenta(c)
         for ident in ids:
@@ -1155,17 +1184,17 @@ def detectar_cuenta_por_ultimos_digitos(ultimos4):
 
 def obtener_estado_gmail_push(clave=None, default=None, tenant_id=None):
     """Obtiene el estado persistido de Gmail Push como key/value."""
-    valores = _leer_values_cacheados(gmail_estado_ws, "gmail_estado_values")
-    if not valores or len(valores) <= 1:
+    tenant_id = _require_tenant_id(tenant_id)
+    filas = []
+    for record in airtable_api.list_records("GmailEstado"):
+        fields = record.get("fields", {}) or {}
+        if str(fields.get("TenantID", "")).strip() == tenant_id:
+            filas.append(fields)
+    if not filas:
         return default if clave else {}
 
-    headers = valores[0]
-    tenant_id = _resolve_tenant_id(tenant_id) if "TenantID" in headers else None
-    filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)]
     estado = {}
     for fila in filas:
-        if tenant_id and str(fila.get("TenantID", "")).strip() != tenant_id:
-            continue
         k = str(fila.get("Clave", "")).strip()
         if k:
             estado[k] = str(fila.get("Valor", "")).strip()
@@ -1180,7 +1209,7 @@ def guardar_estado_gmail_push(tenant_id=None, **campos):
     if not campos:
         return
 
-    tenant_id = _resolve_tenant_id(tenant_id)
+    tenant_id = _require_tenant_id(tenant_id)
     headers_actuales = _headers(gmail_estado_ws)
     if "TenantID" in headers_actuales:
         ahora = get_now().isoformat(timespec="seconds")
@@ -1228,35 +1257,35 @@ def guardar_estado_gmail_push(tenant_id=None, **campos):
             gmail_estado_ws.append_row([clave_txt, valor_txt, ahora], value_input_option="RAW")
     _cache_invalidate("gmail_estado_values")
 
-def obtener_cuenta_por_nombre(nombre_input):
+def obtener_cuenta_por_nombre(nombre_input, tenant_id=None):
     """
     Busca una cuenta por nombre, ignorando tildes y mayúsculas.
     Retorna diccionario con datos de la cuenta y número de fila.
     """
     input_norm = normalizar_texto(nombre_input)
-    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     for i, c in enumerate(cuentas, start=2):
         if normalizar_texto(c["Nombre"]) == input_norm:
             c["_row"] = i
             return c
     return None
 
-def obtener_tipo_cuenta(nombre_input):
+def obtener_tipo_cuenta(nombre_input, tenant_id=None):
     """Retorna el tipo de cuenta (Efectivo/Banco/Crédito/Debito) para un nombre dado."""
-    cuenta = obtener_cuenta_por_nombre(nombre_input)
+    cuenta = obtener_cuenta_por_nombre(nombre_input, tenant_id=tenant_id)
     if not cuenta:
         return None
     return str(cuenta.get("Tipo", "")).strip()
 
-def es_cuenta_credito(nombre_cuenta):
-    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta) or "")
+def es_cuenta_credito(nombre_cuenta, tenant_id=None):
+    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta, tenant_id=tenant_id) or "")
     return tipo == "credito"
 
-def es_cuenta_banco(nombre_cuenta):
-    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta) or "")
+def es_cuenta_banco(nombre_cuenta, tenant_id=None):
+    tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta, tenant_id=tenant_id) or "")
     return tipo == "banco"
 
-def detectar_cuenta_en_texto(texto):
+def detectar_cuenta_en_texto(texto, tenant_id=None):
     """
     Detecta una cuenta mencionada dentro de un texto, ignorando tildes/mayúsculas.
     Prioriza nombres de cuenta más largos para soportar cuentas compuestas.
@@ -1265,7 +1294,7 @@ def detectar_cuenta_en_texto(texto):
         return None
 
     texto_norm = normalizar_texto(texto)
-    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
 
     candidatos = []
     for i, c in enumerate(cuentas, start=2):
@@ -1286,20 +1315,23 @@ def detectar_cuenta_en_texto(texto):
     # Fallback por últimos 4 dígitos presentes en el texto.
     ultimos4 = re.findall(r"(?<!\d)(\d{4})(?!\d)", texto or "")
     for suf in ultimos4:
-        cuenta = detectar_cuenta_por_ultimos_digitos(suf)
+        cuenta = detectar_cuenta_por_ultimos_digitos(suf, tenant_id=tenant_id)
         if cuenta:
             return cuenta
     return None
 
 # ---------- DEUDAS ----------
-def obtener_deudas_con_fila():
+def obtener_deudas_con_fila(tenant_id=None):
     """Lee deudas de Airtable con FORMATTED_VALUE para evitar truncamiento de números."""
+    tenant_id = _require_tenant_id(tenant_id)
     try:
         # Usar función que lee con FORMATTED_VALUE y retorna dicts
         deudas = _leer_registros_formateado("Deudas")
         
         resultado = []
         for idx, d in enumerate(deudas, start=2):
+            if str(d.get("TenantID", "")).strip() != tenant_id:
+                continue
             # Agregar _row para poder actualizar después
             d["_row"] = idx
             resultado.append(d)
@@ -1308,19 +1340,22 @@ def obtener_deudas_con_fila():
     except Exception as e:
         logger.error(f"Error en obtener_deudas_con_fila: {e}")
         # Fallback al cache si falla la lectura directa
-        deudas = _leer_records_cacheados(deudas_ws, "deudas_records")
+        deudas = deudas_ws.get_all_records()
         resultado = []
         for i, d in enumerate(deudas, start=2):
+            if str(d.get("TenantID", "")).strip() != tenant_id:
+                continue
             d["_row"] = i
             resultado.append(d)
         return resultado
 
-def sincronizar_estado_deudas(fecha_referencia=None):
+def sincronizar_estado_deudas(fecha_referencia=None, tenant_id=None):
     """Actualiza Estado según vencimiento y pendiente."""
+    tenant_id = _require_tenant_id(tenant_id)
     if fecha_referencia is None:
         fecha_referencia = get_now()
 
-    for d in obtener_deudas_con_fila():
+    for d in obtener_deudas_con_fila(tenant_id=tenant_id):
         row = d["_row"]
         estado_actual = str(d.get("Estado", "")).strip()
         estado_norm = normalizar_texto(estado_actual)
@@ -1340,7 +1375,7 @@ def sincronizar_estado_deudas(fecha_referencia=None):
         if normalizar_texto(nuevo_estado) != estado_norm:
             deudas_ws.update_cell(row, 8, nuevo_estado)
 
-def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None):
+def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None, tenant_id=None):
     """
     Busca deuda activa de tipo crédito vinculada a la cuenta y vigente para la fecha.
     Si hay varias, toma la de vencimiento más próximo.
@@ -1354,7 +1389,7 @@ def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None):
     cuenta_norm = normalizar_texto(nombre_cuenta)
     candidatas = []
 
-    for d in obtener_deudas_con_fila():
+    for d in obtener_deudas_con_fila(tenant_id=tenant_id):
         tipo = normalizar_texto(d.get("Tipo", ""))
         estado = normalizar_texto(d.get("Estado", ""))
         cuenta_asociada = normalizar_texto(d.get("CuentaAsociada", ""))
@@ -1413,8 +1448,8 @@ def _obtener_periodo_por_fecha(fecha_dt, dia_corte=None):
     return f"{año:04d}-{mes:02d}"
 
 
-def _obtener_dia_corte_de_cuenta(nombre_cuenta):
-    cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
+def _obtener_dia_corte_de_cuenta(nombre_cuenta, tenant_id=None):
+    cuenta = obtener_cuenta_por_nombre(nombre_cuenta, tenant_id=tenant_id)
     if not cuenta:
         return None
     # Intentar varias variantes de nombre de columna
@@ -1428,9 +1463,9 @@ def _obtener_dia_corte_de_cuenta(nombre_cuenta):
     return None
 
 
-def _buscar_deuda_por_periodo(nombre_cuenta, periodo):
+def _buscar_deuda_por_periodo(nombre_cuenta, periodo, tenant_id=None):
     """Busca en Deudas una fila que coincida con CuentaAsociada y Periodo."""
-    for d in obtener_deudas_con_fila():
+    for d in obtener_deudas_con_fila(tenant_id=tenant_id):
         if normalizar_texto(d.get("CuentaAsociada", "")) != normalizar_texto(nombre_cuenta):
             continue
         if str(d.get("Periodo", "")).strip() == str(periodo):
@@ -1438,7 +1473,7 @@ def _buscar_deuda_por_periodo(nombre_cuenta, periodo):
     return None
 
 
-def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None, tipo="credito", moneda="PEN"):
+def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None, tipo="credito", moneda="PEN", tenant_id=None):
     """Crea una nueva fila en Deudas para el periodo indicado con montos iniciales 0."""
     next_id = _siguiente_id_deuda()
     deuda_id = str(next_id)
@@ -1467,7 +1502,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
     set_if_present("CuentaAsociada", nombre_cuenta)
     set_if_present("Periodo", periodo)
 
-    fila = [row_map.get(h, "") for h in headers]
+    fila = _row_with_tenant(deudas_ws, [row_map.get(h, "") for h in headers if h != "TenantID"], tenant_id)
     deudas_ws.append_row(fila, value_input_option="RAW")
     _cache_invalidate("deudas_records")
     logger.info("Crear deuda ciclo | id=%s cuenta=%s periodo=%s fecha_venc=%s", deuda_id, nombre_cuenta, periodo, fecha_venc)
@@ -1489,7 +1524,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
         logger.info("Migración: añadidas columnas Periodo/FechaCorte en Deudas")
 
     # Colocar periodo para filas existentes
-    deudas = obtener_deudas_con_fila()
+    deudas = obtener_deudas_con_fila(tenant_id=tenant_id)
     headers = deudas_ws.row_values(1)
     try:
         col_periodo = headers.index("Periodo") + 1
@@ -1512,7 +1547,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
             fecha_corte_str = fecha_venc.strftime("%d/%m/%Y")
         else:
             # intentar derivar periodo desde hoy y dia de corte de la cuenta
-            dia_corte = _obtener_dia_corte_de_cuenta(d.get("CuentaAsociada", ""))
+            dia_corte = _obtener_dia_corte_de_cuenta(d.get("CuentaAsociada", ""), tenant_id=tenant_id)
             periodo = _obtener_periodo_por_fecha(get_now(), dia_corte)
             fecha_corte_str = ""
 
@@ -1525,16 +1560,16 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
     logger.info("Migración: asignados Periodo/FechaCorte a %d filas de Deudas", updated)
 
     # Crear ciclos vacíos para periodo actual en tarjetas de crédito si faltan
-    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     created = 0
     for c in cuentas:
         tipo = normalizar_texto(c.get("Tipo", ""))
         if tipo != "credito":
             continue
         nombre = c.get("Nombre")
-        dia_corte = _obtener_dia_corte_de_cuenta(nombre)
+        dia_corte = _obtener_dia_corte_de_cuenta(nombre, tenant_id=tenant_id)
         periodo_actual = _obtener_periodo_por_fecha(get_now(), dia_corte)
-        existe = _buscar_deuda_por_periodo(nombre, periodo_actual)
+        existe = _buscar_deuda_por_periodo(nombre, periodo_actual, tenant_id=tenant_id)
         if not existe:
             # intentar derivar fecha_venc desde DiaPago
             fecha_venc = None
@@ -1547,27 +1582,28 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
                         fecha_venc = datetime(año, mes, min(dp, 28))
                     except Exception:
                         fecha_venc = None
-            crear_deuda_ciclo(nombre, periodo_actual, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda=c.get("Moneda", "PEN"))
+            crear_deuda_ciclo(nombre, periodo_actual, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda=c.get("Moneda", "PEN"), tenant_id=tenant_id)
             created += 1
 
     logger.info("Migración: creados %d ciclos vacíos para periodo actual", created)
     return {"asignadas": updated, "creadas": created}
 
-def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=None):
+def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=None, tenant_id=None):
     """Incrementa MontoTotal de la deuda activa asociada a una cuenta de crédito."""
     if fecha_transaccion is None:
         fecha_transaccion = get_now()
 
     # Determinar periodo según fecha_transaccion y dia de corte de la cuenta
-    dia_corte = _obtener_dia_corte_de_cuenta(nombre_cuenta)
+    tenant_id = _require_tenant_id(tenant_id)
+    dia_corte = _obtener_dia_corte_de_cuenta(nombre_cuenta, tenant_id=tenant_id)
     periodo = _obtener_periodo_por_fecha(fecha_transaccion, dia_corte)
 
     # Buscar deuda por periodo
-    deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo)
+    deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo, tenant_id=tenant_id)
     if not deuda:
         # Si no existe deuda para el periodo, crearla (fecha_venc opcional)
         # Intentar derivar FechaVenc desde DiaPago de la cuenta
-        cuenta_info = obtener_cuenta_por_nombre(nombre_cuenta)
+        cuenta_info = obtener_cuenta_por_nombre(nombre_cuenta, tenant_id=tenant_id)
         fecha_venc = None
         if cuenta_info:
             for key in ("DíaPago", "DiaPago", "Dia Pago", "Día Pago"):
@@ -1580,10 +1616,10 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
                         fecha_venc = datetime(año, mes, min(dp, 28))
                     except Exception:
                         fecha_venc = None
-        nueva_id = crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda="PEN")
+        nueva_id = crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda="PEN", tenant_id=tenant_id)
         # Refrescar cache y obtener la deuda recién creada
         _cache_invalidate("deudas_records")
-        deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo)
+        deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo, tenant_id=tenant_id)
         if not deuda:
             logger.warning("No se pudo crear deuda para periodo %s cuenta %s", periodo, nombre_cuenta)
             return ""
@@ -1632,12 +1668,12 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
 
     return deuda_id
 
-def obtener_deuda_por_id(deuda_id):
+def obtener_deuda_por_id(deuda_id, tenant_id=None):
     deuda_id_norm = str(deuda_id or "").strip()
     if not deuda_id_norm:
         return None
 
-    for d in obtener_deudas_con_fila():
+    for d in obtener_deudas_con_fila(tenant_id=tenant_id):
         if str(d.get("ID", "")).strip() == deuda_id_norm:
             return d
     return None
@@ -1645,9 +1681,9 @@ def obtener_deuda_por_id(deuda_id):
 def _siguiente_id_deuda():
     return int(obtener_siguiente_id(deudas_ws, prefix=""))
 
-def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta):
+def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta, tenant_id=None):
     """Ajusta MontoTotal de una deuda por ID. delta positivo suma, negativo resta."""
-    deuda = obtener_deuda_por_id(deuda_id)
+    deuda = obtener_deuda_por_id(deuda_id, tenant_id=tenant_id)
     if not deuda:
         logger.warning(f"No se encontró deuda ID '{deuda_id}' para ajuste.")
         return False
@@ -1677,9 +1713,9 @@ def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta):
     return True
 
 
-def ajustar_pago_deuda(deuda_id, delta_pago, moneda_delta):
+def ajustar_pago_deuda(deuda_id, delta_pago, moneda_delta, tenant_id=None):
     """Ajusta MontoPagado de una deuda por ID. delta positivo suma, negativo resta."""
-    deuda = obtener_deuda_por_id(deuda_id)
+    deuda = obtener_deuda_por_id(deuda_id, tenant_id=tenant_id)
     if not deuda:
         logger.warning(f"No se encontró deuda ID '{deuda_id}' para ajuste de pago.")
         return False
@@ -1717,34 +1753,37 @@ def ajustar_pago_deuda(deuda_id, delta_pago, moneda_delta):
         moneda_deuda,
         nuevo_pagado,
     )
-    sincronizar_estado_deudas()
+    sincronizar_estado_deudas(tenant_id=tenant_id)
     return True
 
-def obtener_transaccion_por_id(trans_id):
+def obtener_transaccion_por_id(trans_id, tenant_id=None):
     trans_id_norm = str(trans_id or "").strip().upper()
     if not trans_id_norm:
         return None
 
-    transacciones = _leer_records_cacheados(trans_ws, "transacciones_records")
+    tenant_id = _require_tenant_id(tenant_id)
+    transacciones = trans_ws.get_all_records()
     for i, t in enumerate(transacciones, start=2):
+        if str(t.get("TenantID", "")).strip() != tenant_id:
+            continue
         if str(t.get("ID", "")).strip().upper() == trans_id_norm:
             t["_row"] = i
             return t
     return None
 
-def _aplicar_reversa_saldo(tipo, cuenta, monto, moneda):
+def _aplicar_reversa_saldo(tipo, cuenta, monto, moneda, tenant_id=None):
     monto_pen = convertir_a_pen(parsear_numero(monto), moneda)
     if normalizar_texto(tipo) == "ingreso":
-        return actualizar_saldo_cuenta(cuenta, "gasto", monto_pen)
-    return actualizar_saldo_cuenta(cuenta, "ingreso", monto_pen)
+        return actualizar_saldo_cuenta(cuenta, "gasto", monto_pen, tenant_id=tenant_id)
+    return actualizar_saldo_cuenta(cuenta, "ingreso", monto_pen, tenant_id=tenant_id)
     pend_ws.update(f"J{row}:N{row}", [["Confirmado", "", tx_id, ahora, nota_extra]], value_input_option="RAW")
-def _aplicar_saldo(tipo, cuenta, monto, moneda):
+def _aplicar_saldo(tipo, cuenta, monto, moneda, tenant_id=None):
     monto_pen = convertir_a_pen(parsear_numero(monto), moneda)
-    return actualizar_saldo_cuenta(cuenta, tipo, monto_pen)
+    return actualizar_saldo_cuenta(cuenta, tipo, monto_pen, tenant_id=tenant_id)
 
-def eliminar_transaccion(trans_id):
+def eliminar_transaccion(trans_id, tenant_id=None):
     """Elimina una transacción y revierte su impacto en saldo/deuda."""
-    trans = obtener_transaccion_por_id(trans_id)
+    trans = obtener_transaccion_por_id(trans_id, tenant_id=tenant_id)
     if not trans:
         raise ValueError(f"No existe la transacción '{trans_id}'.")
 
@@ -1757,21 +1796,21 @@ def eliminar_transaccion(trans_id):
 
     es_pago_deuda = normalizar_texto(trans.get("Categoría", "")) == "deudas" and normalizar_texto(trans.get("Subcategoría", "")) == "pago" and deuda_id
 
-    _aplicar_reversa_saldo(tipo, cuenta, monto, moneda)
+    _aplicar_reversa_saldo(tipo, cuenta, monto, moneda, tenant_id=tenant_id)
 
     if es_pago_deuda:
-        deuda = obtener_deuda_por_id(deuda_id)
+        deuda = obtener_deuda_por_id(deuda_id, tenant_id=tenant_id)
         cuenta_asociada = deuda.get("CuentaAsociada", "") if deuda else ""
         deuda_moneda = str(deuda.get("Moneda", moneda)).upper() if deuda else moneda
         if cuenta_asociada:
-            actualizar_saldo_cuenta(cuenta_asociada, "gasto", convertir_a_pen(monto, moneda))
-        ajustar_pago_deuda(deuda_id, -monto, moneda)
+            actualizar_saldo_cuenta(cuenta_asociada, "gasto", convertir_a_pen(monto, moneda), tenant_id=tenant_id)
+        ajustar_pago_deuda(deuda_id, -monto, moneda, tenant_id=tenant_id)
     elif normalizar_texto(tipo) == "gasto" and deuda_id:
-        ajustar_monto_deuda(deuda_id, -monto, moneda)
+        ajustar_monto_deuda(deuda_id, -monto, moneda, tenant_id=tenant_id)
 
     trans_ws.delete_rows(row)
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
-    sincronizar_estado_deudas()
+    sincronizar_estado_deudas(tenant_id=tenant_id)
 
     return {
         "id": str(trans.get("ID", trans_id)),
@@ -1781,12 +1820,12 @@ def eliminar_transaccion(trans_id):
         "cuenta": cuenta,
     }
 
-def editar_transaccion(trans_id, campo, nuevo_valor):
+def editar_transaccion(trans_id, campo, nuevo_valor, tenant_id=None):
     """
     Edita un campo de una transacción y recalcula impactos en saldo/deuda.
     Campos soportados: monto, moneda, categoria, subcategoria, cuenta, metodo, nota, fecha.
     """
-    trans = obtener_transaccion_por_id(trans_id)
+    trans = obtener_transaccion_por_id(trans_id, tenant_id=tenant_id)
     if not trans:
         raise ValueError(f"No existe la transacción '{trans_id}'.")
 
@@ -1819,14 +1858,14 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
             raise ValueError("Moneda no válida. Usa PEN o USD.")
         nuevo["moneda"] = moneda
     elif campo_norm == "categoria":
-        categoria, subcat = resolver_categoria(str(nuevo_valor).strip(), tipo)
+        categoria, subcat = resolver_categoria(str(nuevo_valor).strip(), tipo, tenant_id=tenant_id)
         nuevo["categoria"] = categoria
         if subcat:
             nuevo["subcategoria"] = subcat
     elif campo_norm == "subcategoria":
         nuevo["subcategoria"] = str(nuevo_valor or "").strip()
     elif campo_norm == "cuenta":
-        cuenta_info = obtener_cuenta_por_nombre(str(nuevo_valor).strip())
+        cuenta_info = obtener_cuenta_por_nombre(str(nuevo_valor).strip(), tenant_id=tenant_id)
         if not cuenta_info:
             raise ValueError(f"Cuenta '{nuevo_valor}' no existe.")
         nuevo["cuenta"] = cuenta_info["Nombre"]
@@ -1843,22 +1882,23 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
         raise ValueError("Campo no soportado. Usa monto, moneda, categoria, subcategoria, cuenta, metodo, nota o fecha.")
 
     # Revertir impacto anterior
-    _aplicar_reversa_saldo(actual["tipo"], actual["cuenta"], actual["monto"], actual["moneda"])
+    _aplicar_reversa_saldo(actual["tipo"], actual["cuenta"], actual["monto"], actual["moneda"], tenant_id=tenant_id)
     if normalizar_texto(actual["tipo"]) == "gasto" and actual["deuda_id"]:
-        ajustar_monto_deuda(actual["deuda_id"], -actual["monto"], actual["moneda"])
+        ajustar_monto_deuda(actual["deuda_id"], -actual["monto"], actual["moneda"], tenant_id=tenant_id)
 
     # Reaplicar impacto nuevo
     nuevo_deuda_id = ""
     fecha_nueva_dt = parsear_fecha(nuevo["fecha"]) or get_now()
-    if normalizar_texto(nuevo["tipo"]) == "gasto" and es_cuenta_credito(nuevo["cuenta"]):
+    if normalizar_texto(nuevo["tipo"]) == "gasto" and es_cuenta_credito(nuevo["cuenta"], tenant_id=tenant_id):
         nuevo_deuda_id = incrementar_deuda_por_gasto(
             nombre_cuenta=nuevo["cuenta"],
             monto=nuevo["monto"],
             moneda=nuevo["moneda"],
             fecha_transaccion=fecha_nueva_dt,
+            tenant_id=tenant_id,
         )
 
-    _aplicar_saldo(nuevo["tipo"], nuevo["cuenta"], nuevo["monto"], nuevo["moneda"])
+    _aplicar_saldo(nuevo["tipo"], nuevo["cuenta"], nuevo["monto"], nuevo["moneda"], tenant_id=tenant_id)
 
     fila = [[
         nuevo["id"],
@@ -1875,7 +1915,7 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
     ]]
     trans_ws.update(f"A{row}:K{row}", fila, value_input_option="RAW")
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
-    sincronizar_estado_deudas()
+    sincronizar_estado_deudas(tenant_id=tenant_id)
 
     return {
         "id": nuevo["id"],
@@ -1884,8 +1924,8 @@ def editar_transaccion(trans_id, campo, nuevo_valor):
         "deuda_id": nuevo_deuda_id,
     }
 
-def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
-    cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
+def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen, tenant_id=None):
+    cuenta = obtener_cuenta_por_nombre(nombre_cuenta, tenant_id=tenant_id)
     if not cuenta:
         logger.warning(f"Cuenta '{nombre_cuenta}' no encontrada. No se actualizará saldo.")
         return False
@@ -1938,8 +1978,8 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen):
     logger.debug(f"Saldo de '{nombre_cuenta}' escrito en hoja: {saldo_actual} -> {nuevo_saldo}")
     return True
 
-def obtener_saldo_actual_cuenta(nombre_cuenta):
-    cuenta = obtener_cuenta_por_nombre(nombre_cuenta)
+def obtener_saldo_actual_cuenta(nombre_cuenta, tenant_id=None):
+    cuenta = obtener_cuenta_por_nombre(nombre_cuenta, tenant_id=tenant_id)
     if not cuenta:
         return None
     fila = cuenta.get("_row")
@@ -1957,10 +1997,11 @@ def obtener_saldo_actual_cuenta(nombre_cuenta):
 
 # ---------- TRANSACCIONES ----------
 def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuenta="Efectivo", metodo="Efectivo", nota="", fecha=None, tenant_id=None):
-    sincronizar_estado_deudas()
+    tenant_id = _require_tenant_id(tenant_id)
+    sincronizar_estado_deudas(tenant_id=tenant_id)
 
     # Resolver categoría y subcategoría
-    categoria_original, subcategoria_resuelta = resolver_categoria(categoria_input, tipo)
+    categoria_original, subcategoria_resuelta = resolver_categoria(categoria_input, tipo, tenant_id=tenant_id)
     # Si no se pasó subcategoría explícita, usar la resuelta (si existe)
     if not subcategoria and subcategoria_resuelta:
         subcategoria = subcategoria_resuelta
@@ -1977,17 +2018,18 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     # Asegura que Monto viaje como número, no como texto.
     monto_num = round(float(monto), 2)
 
-    cuenta_info = obtener_cuenta_por_nombre(cuenta)
+    cuenta_info = obtener_cuenta_por_nombre(cuenta, tenant_id=tenant_id)
     cuenta_final = cuenta_info["Nombre"] if cuenta_info else cuenta
     metodo = _metodo_compatible_airtable(metodo)
 
     deuda_id = ""
-    if tipo.lower() == "gasto" and es_cuenta_credito(cuenta_final):
+    if tipo.lower() == "gasto" and es_cuenta_credito(cuenta_final, tenant_id=tenant_id):
         deuda_id = incrementar_deuda_por_gasto(
             nombre_cuenta=cuenta_final,
             monto=monto_num,
             moneda=moneda,
             fecha_transaccion=fecha_dt,
+            tenant_id=tenant_id,
         )
 
     nueva_fila = [
@@ -2010,7 +2052,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
 
     # Log detalle de saldo antes de aplicar la transacción
     try:
-        saldo_inicial = obtener_saldo_actual_cuenta(cuenta_final)
+        saldo_inicial = obtener_saldo_actual_cuenta(cuenta_final, tenant_id=tenant_id)
         esperado = saldo_inicial + monto_pen if tipo.lower() == "ingreso" else saldo_inicial - monto_pen
         logger.info(
             "Aplicar transacción | trans_id=%s cuenta=%s tipo=%s monto=%.2f PEN saldo_inicial=%.2f saldo_esperado=%.2f",
@@ -2024,7 +2066,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     except Exception:
         logger.debug("No se pudo obtener saldo inicial para logging de transacción")
 
-    actualizar_saldo_cuenta(cuenta_final, tipo, monto_pen)
+    actualizar_saldo_cuenta(cuenta_final, tipo, monto_pen, tenant_id=tenant_id)
     return trans_id
 
 def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=None):
@@ -2034,13 +2076,14 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     - Descuenta saldo de la cuenta banco
     - Registra una transacción tipo Gasto con DeudaID
     """
-    sincronizar_estado_deudas()
+    tenant_id = _require_tenant_id(tenant_id)
+    sincronizar_estado_deudas(tenant_id=tenant_id)
 
-    deuda = obtener_deuda_por_id(deuda_id)
+    deuda = obtener_deuda_por_id(deuda_id, tenant_id=tenant_id)
     if not deuda:
         raise ValueError(f"No existe la deuda ID '{deuda_id}'.")
 
-    if not es_cuenta_banco(cuenta_banco):
+    if not es_cuenta_banco(cuenta_banco, tenant_id=tenant_id):
         raise ValueError(f"La cuenta '{cuenta_banco}' no es de tipo Banco.")
 
     row_deuda = deuda["_row"]
@@ -2085,7 +2128,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
 
     # Verificar saldo disponible en banco (se maneja en PEN en la hoja Cuentas).
     pago_en_pen = convertir_a_pen(monto_pago_origen, moneda_pago)
-    saldo_banco = obtener_saldo_actual_cuenta(cuenta_banco)
+    saldo_banco = obtener_saldo_actual_cuenta(cuenta_banco, tenant_id=tenant_id)
     if saldo_banco is None:
         raise ValueError(f"No existe la cuenta '{cuenta_banco}'.")
     if saldo_banco < pago_en_pen:
@@ -2109,12 +2152,12 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     _cache_invalidate("deudas_records")
     cuenta_asociada = str(deuda.get("CuentaAsociada", "")).strip()
     if cuenta_asociada:
-        tipo_cuenta_asociada = normalizar_texto(obtener_tipo_cuenta(cuenta_asociada) or "")
+        tipo_cuenta_asociada = normalizar_texto(obtener_tipo_cuenta(cuenta_asociada, tenant_id=tenant_id) or "")
         # Solo ajustar la cuenta asociada cuando sea línea de deuda (crédito/débito).
         # Si la deuda está asociada a una cuenta Banco, ese ajuste se anula con el gasto
         # posterior y deja el saldo igual (ingreso + gasto sobre la misma cuenta).
         if tipo_cuenta_asociada in {"credito", "debito"}:
-            actualizar_saldo_cuenta(cuenta_asociada, "ingreso", pago_en_pen)
+            actualizar_saldo_cuenta(cuenta_asociada, "ingreso", pago_en_pen, tenant_id=tenant_id)
         else:
             logger.info(
                 "Omitir ajuste cuenta asociada | deuda_id=%s cuenta=%s tipo=%s",
@@ -2227,8 +2270,8 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
 
     # Descontar saldo del banco.
-    actualizar_saldo_cuenta(cuenta_banco, "gasto", pago_en_pen)
-    sincronizar_estado_deudas()
+    actualizar_saldo_cuenta(cuenta_banco, "gasto", pago_en_pen, tenant_id=tenant_id)
+    sincronizar_estado_deudas(tenant_id=tenant_id)
 
     pendiente_nuevo = round(monto_total - nuevo_pagado, 2)
     resultado = {
@@ -2247,16 +2290,14 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     return resultado
 
 # ---------- CONSULTAS PARA COMANDOS ----------
-def obtener_resumen_cuentas():
+def obtener_resumen_cuentas(tenant_id=None):
     """Devuelve saldo de cada cuenta, total activos, total pasivos (créditos) y patrimonio neto"""
-    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     resumen = []
     total_activos = 0.0
     total_pasivos = 0.0
-    for i, c in enumerate(cuentas, start=2):
-        # Leer SaldoActual directamente de la celda F con FORMATTED_VALUE para evitar truncamiento
-        celda_saldo = cuentas_ws.acell(f"F{i}", value_render_option="FORMATTED_VALUE").value
-        saldo = parsear_numero(celda_saldo if celda_saldo is not None else c.get("SaldoActual", 0))
+    for c in cuentas:
+        saldo = parsear_numero(c.get("SaldoActual", 0))
         tipo = normalizar_texto(c.get("Tipo", ""))
         if tipo in ["efectivo", "banco", "ahorro"]:
             total_activos += saldo
@@ -2276,18 +2317,16 @@ def obtener_resumen_cuentas():
         "patrimonio": patrimonio
     }
 
-def obtener_balance_mes(mes=None, año=None):
+def obtener_balance_mes(mes=None, año=None, tenant_id=None):
     """Calcula ingresos, gastos y ahorro de un mes específico (por defecto mes actual)"""
     if mes is None or año is None:
         ahora = get_now()
         mes = ahora.month
         año = ahora.year
 
-    # Leer valores con FORMATTED_VALUE para evitar truncamiento de montos
-    # Rango: B2:E1000 = Fecha, Tipo, Monto, Moneda (sin ID)
-    valores_formateados = _leer_rango_formateado("Transacciones", "B2:E1000")
+    transacciones = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
     
-    if not valores_formateados:
+    if not transacciones:
         logger.warning(f"No se encontraron valores en rango B2:E1000 de Transacciones")
         return {
             "mes": mes,
@@ -2297,26 +2336,22 @@ def obtener_balance_mes(mes=None, año=None):
             "ahorro": 0.0,
         }
 
-    logger.info(f"Leyendo {len(valores_formateados)} filas de Transacciones para {mes:02d}/{año}")
+    logger.info(f"Leyendo {len(transacciones)} filas de Transacciones para {mes:02d}/{año}")
     
     ingresos = 0.0
     gastos = 0.0
     filas_procesadas = 0
     
-    # Encabezados esperados: Fecha(B), Tipo(C), Monto(D), Moneda(E)
-    for fila in valores_formateados:
-        if not fila or len(fila) < 4:  # Mínimo: Fecha, Tipo, Monto, Moneda
-            continue
-            
+    for fila in transacciones:
         try:
-            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")  # Columna B
+            fecha = parsear_fecha(fila.get("Fecha", ""))
             if not fecha:
                 continue
 
             if fecha.year == año and fecha.month == mes:
-                tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")  # Columna C
-                monto_str = fila[2] if len(fila) > 2 else "0"  # Columna D
-                moneda = str(fila[3] if len(fila) > 3 else "PEN").upper()  # Columna E
+                tipo = normalizar_texto(fila.get("Tipo", ""))
+                monto_str = fila.get("Monto", 0)
+                moneda = str(fila.get("Moneda", "PEN")).upper()
                 
                 monto = parsear_numero(monto_str)
                 monto_pen = convertir_a_pen(monto, moneda)
@@ -2342,18 +2377,16 @@ def obtener_balance_mes(mes=None, año=None):
         "ahorro": ahorro
     }
 
-def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
+def obtener_gasto_por_categoria(categoria_input, mes=None, año=None, tenant_id=None):
     """Gasto acumulado en una categoría para un mes (por defecto actual)"""
     # Validar categoría y obtener nombre original
-    categoria_original = validar_categoria(categoria_input, "Gasto")
+    categoria_original = validar_categoria(categoria_input, "Gasto", tenant_id=tenant_id)
     if mes is None or año is None:
         ahora = get_now()
         mes = ahora.month
         año = ahora.year
 
-    # Leer valores con FORMATTED_VALUE para evitar truncamiento de montos
-    # Rango: B2:F1000 = Fecha, Tipo, Monto, Moneda, Categoría (sin ID)
-    valores_con_cat = _leer_rango_formateado("Transacciones", "B2:F1000")
+    valores_con_cat = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
     
     if not valores_con_cat:
         return {
@@ -2365,27 +2398,23 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
 
     total = 0.0
     
-    # Encabezados: Fecha(B), Tipo(C), Monto(D), Moneda(E), Categoría(F)
     for fila in valores_con_cat:
-        if not fila or len(fila) < 5:
-            continue
-            
         try:
-            tipo = normalizar_texto(fila[1] if len(fila) > 1 else "")  # Columna C
+            tipo = normalizar_texto(fila.get("Tipo", ""))
             if tipo != "gasto":
                 continue
 
-            categoria_registro = str(fila[4] if len(fila) > 4 else "").strip()  # Columna F
+            categoria_registro = str(_valor_campo(fila, "Categoría", "Categoria")).strip()
             if categoria_registro != categoria_original:
                 continue
 
-            fecha = parsear_fecha(fila[0] if len(fila) > 0 else "")  # Columna B
+            fecha = parsear_fecha(fila.get("Fecha", ""))
             if not fecha:
                 continue
 
             if fecha.year == año and fecha.month == mes:
-                monto_str = fila[2] if len(fila) > 2 else "0"  # Columna D
-                moneda = str(fila[3] if len(fila) > 3 else "PEN").upper()  # Columna E
+                monto_str = fila.get("Monto", 0)
+                moneda = str(fila.get("Moneda", "PEN")).upper()
                 monto = parsear_numero(monto_str)
                 total += convertir_a_pen(monto, moneda)
         except (IndexError, ValueError):
@@ -2398,11 +2427,11 @@ def obtener_gasto_por_categoria(categoria_input, mes=None, año=None):
         "total": total
     }
 
-def obtener_deudas_activas():
+def obtener_deudas_activas(tenant_id=None):
     """Lista deudas con saldo pendiente en estado Activa o Vencida.
     Se priorizan Vencidas para alertas y visualización."""
-    sincronizar_estado_deudas()
-    deudas = obtener_deudas_con_fila()
+    sincronizar_estado_deudas(tenant_id=tenant_id)
+    deudas = obtener_deudas_con_fila(tenant_id=tenant_id)
     salida = []
     for d in deudas:
         estado_norm = normalizar_texto(d.get("Estado", ""))
@@ -2435,15 +2464,15 @@ def obtener_deudas_activas():
     ))
     return salida
 
-def obtener_recordatorios_deudas(dias_alerta=3, fecha_referencia=None):
+def obtener_recordatorios_deudas(dias_alerta=3, fecha_referencia=None, tenant_id=None):
     """Retorna deudas vencidas o por vencer dentro de `dias_alerta`."""
     if fecha_referencia is None:
         fecha_referencia = get_now()
 
-    sincronizar_estado_deudas(fecha_referencia)
+    sincronizar_estado_deudas(fecha_referencia, tenant_id=tenant_id)
     recordatorios = []
 
-    for d in obtener_deudas_con_fila():
+    for d in obtener_deudas_con_fila(tenant_id=tenant_id):
         estado = normalizar_texto(d.get("Estado", ""))
         if estado not in ["activa", "vencida"]:
             continue
@@ -2493,25 +2522,18 @@ def generar_snapshot_saldos(origen="Manual", fecha=None, tenant_id=None):
         fecha_dt = get_now()
 
     snapshot_id = _siguiente_id_snapshot()
-    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records")
-    
-    # Leer SaldoActual con FORMATTED_VALUE para evitar truncamiento
-    saldos_formateados = _leer_rango_formateado("Cuentas", "F2:F100")
-    saldos_dict = {}
-    for idx, fila in enumerate(saldos_formateados):
-        if fila:
-            saldos_dict[idx + 2] = fila[0] if fila else "0"
+    tenant_id = _require_tenant_id(tenant_id)
+    cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     
     filas = []
     total_pen = 0.0
 
-    for i, c in enumerate(cuentas, start=2):
+    for c in cuentas:
         nombre = str(c.get("Nombre", "")).strip()
         tipo = str(c.get("Tipo", "")).strip()
         moneda = str(c.get("Moneda", "PEN")).strip().upper() or "PEN"
 
-        # Usar valor formateado si está disponible, sino usar del diccionario
-        saldo_valor = saldos_dict.get(i) or c.get("SaldoActual", 0)
+        saldo_valor = c.get("SaldoActual", 0)
         saldo = round(parsear_numero(saldo_valor), 2)
         
         try:
@@ -2545,7 +2567,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None, tenant_id=None):
     }
 
 
-def obtener_datos_reporte_mensual(mes=None, año=None):
+def obtener_datos_reporte_mensual(mes=None, año=None, tenant_id=None):
     """
     Retorna métricas y agregados del mes para construir reportes visuales.
     Todos los cálculos monetarios se normalizan a PEN.
@@ -2555,9 +2577,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
         mes = ahora.month
         año = ahora.year
 
-    # Leer con FORMATTED_VALUE para evitar truncamiento
-    # Rango: B2:J1000 = Fecha, Tipo, Monto, Moneda, Categoría, Subcategoría, Cuenta, Método, Nota (sin ID)
-    valores = _leer_rango_formateado("Transacciones", "B2:J1000")
+    valores = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
     
     if not valores:
         return {
@@ -2584,7 +2604,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
     movimientos = []
 
     # Mapa de tipo de cuenta para segmentación (Banco vs Crédito/Débito)
-    cuentas_records = _leer_records_cacheados(cuentas_ws, "cuentas_records")
+    cuentas_records = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     cuenta_tipo_map = {}
     for c in cuentas_records:
         nombre = str(c.get("Nombre", "")).strip()
@@ -2592,28 +2612,24 @@ def obtener_datos_reporte_mensual(mes=None, año=None):
             continue
         cuenta_tipo_map[normalizar_texto(nombre)] = normalizar_texto(c.get("Tipo", ""))
     for fila in valores:
-        if not fila or len(fila) < 4:
-            continue
-            
         try:
-            fecha_raw = fila[0] if len(fila) > 0 else ""  # Columna B
+            fecha_raw = fila.get("Fecha", "")
             fecha_dt = parsear_fecha(fecha_raw)
             if not fecha_dt:
                 continue
             if fecha_dt.year != año or fecha_dt.month != mes:
                 continue
 
-            tipo = str(fila[1] if len(fila) > 1 else "").strip().capitalize()  # Columna C
-            monto_str = fila[2] if len(fila) > 2 else "0"  # Columna D
-            moneda = str(fila[3] if len(fila) > 3 else "PEN").upper()  # Columna E
+            tipo = str(fila.get("Tipo", "")).strip().capitalize()
+            monto_str = fila.get("Monto", 0)
+            moneda = str(fila.get("Moneda", "PEN")).upper()
             monto = parsear_numero(monto_str)
             monto_pen = convertir_a_pen(monto, moneda)
 
-            categoria = str(fila[4] if len(fila) > 4 else "Sin categoría").strip() or "Sin categoría"  # Columna F
-            _subcategoria = str(fila[5] if len(fila) > 5 else "").strip()  # Columna G (no usada en KPIs)
-            cuenta = str(fila[6] if len(fila) > 6 else "Sin cuenta").strip() or "Sin cuenta"  # Columna H
-            nota = str(fila[8] if len(fila) > 8 else "").strip()  # Columna J
-            tx_id = fecha_dt.strftime("%Y%m%d") + "-" + tipo[:1]  # ID generado a partir de fecha y tipo
+            categoria = str(_valor_campo(fila, "Categoría", "Categoria", default="Sin categoría")).strip() or "Sin categoría"
+            cuenta = str(fila.get("Cuenta", "Sin cuenta")).strip() or "Sin cuenta"
+            nota = str(fila.get("Nota", "")).strip()
+            tx_id = str(fila.get("ID", "")).strip() or fecha_dt.strftime("%Y%m%d") + "-" + tipo[:1]
 
             movimientos.append({
                 "id": tx_id,

@@ -19,6 +19,9 @@ if not TELEGRAM_TOKEN:
 # ID de usuario autorizado (para restringir comandos)
 USER_ID = int(os.getenv("USER_ID", "123456789"))
 ADMIN_TELEGRAM_USER_ID = int(os.getenv("ADMIN_TELEGRAM_USER_ID", str(USER_ID)))
+SYSTEM_TENANT_ID = os.getenv("SYSTEM_TENANT_ID", f"TEN_TG_{ADMIN_TELEGRAM_USER_ID}").strip()
+if not SYSTEM_TENANT_ID:
+    raise ValueError("SYSTEM_TENANT_ID no puede estar vacío")
 
 # Airtable como única fuente de datos
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")

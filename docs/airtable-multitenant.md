@@ -10,10 +10,12 @@ Reglas principales:
 
 - Cada usuario autorizado tiene un `TenantID`.
 - Todas las lecturas y escrituras financieras deben filtrar por `TenantID`.
+- No existe modo legacy: si una operacion financiera no recibe `tenant_id`, debe fallar.
 - Los usuarios nuevos se crean desde Telegram con `/admin_add_user`.
 - Las cuentas, deudas y categorias del usuario se configuran desde Telegram con `/configurar`.
 - Gmail y voz quedan apagados para usuarios nuevos: `GmailEnabled=No` y `VoiceEnabled=No`.
 - El admin puede mantener Gmail/voz para su usuario principal si las variables globales estan habilitadas.
+- Jobs automaticos y webhooks sin usuario Telegram usan `SYSTEM_TENANT_ID`.
 
 ## Diferencia Contra `main`
 
@@ -264,9 +266,44 @@ python -m unittest tests.airtable_store_tests tests.tenant_context_tests tests.t
 
 8. Solo despues hacer merge de `develop` a `main`.
 
+## Reglas De Codigo Sin Legacy
+
+Toda funcion financiera debe recibir `tenant_id` de forma explicita. Esto aplica a:
+
+- lecturas: resumen, balance mensual, categorias, deudas, reportes, pendientes, GmailEstado
+- escrituras: gasto, ingreso, pago de deuda, edicion, eliminacion, pendientes, snapshots
+- automatizaciones: recordatorios, snapshot diario, renovacion Gmail Watch, webhook Gmail Push
+
+Los comandos de Telegram deben resolver el tenant con `resolve_tenant_context(update.effective_user.id)` y pasar `tenant.tenant_id`.
+
+Los procesos sin usuario Telegram deben usar:
+
+```env
+SYSTEM_TENANT_ID=TEN_TG_<telegram_id_admin>
+```
+
+No se debe usar un fallback silencioso al admin dentro de `airtable_handler.py`. La capa financiera debe fallar con error claro si falta `tenant_id`.
+
+## Limpieza De Datos Legacy
+
+Despues de agregar `TenantID`, revisa que ninguna tabla financiera tenga registros con `TenantID` vacio o con valores temporales como `TEN00001`.
+
+Tambien revisa `GmailEstado`. Las claves validas son:
+
+- `GMAIL_REFRESH_TOKEN`
+- `last_history_id`
+- `last_push_at`
+- `last_push_message_count`
+- `watch_email`
+- `watch_expiration`
+- `watch_topic`
+- `watch_updated_at`
+
+Si aparecen claves que en realidad son valores, por ejemplo un email, un topic, un timestamp o un numero de expiracion, son residuos del esquema anterior y deben eliminarse.
+
 ## Riesgos Pendientes
 
-- Varios comandos financieros legacy todavia usan `airtable_handler.py`; deben migrarse gradualmente para filtrar por tenant antes de abrirlos a mas usuarios.
+- `airtable_handler.py` se mantiene como servicio financiero principal, pero sus lecturas y escrituras financieras deben recibir `tenant_id` y filtrar por `TenantID`.
 - Gmail Push procesa un buzon global; por ahora debe mantenerse solo para admin o usuarios con `GmailEnabled=Si`.
 - Voz usa configuracion global del proveedor; por ahora debe mantenerse solo para usuarios con `VoiceEnabled=Si`.
 - Los IDs como `TX00001` pueden repetirse entre tenants. Mientras todos los accesos filtren por `TenantID`, esto es aceptable.

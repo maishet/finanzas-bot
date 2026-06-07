@@ -306,6 +306,8 @@ Crear un archivo `.env` con algo similar a esto:
 ```env
 TELEGRAM_TOKEN=tu_token_de_telegram
 USER_ID=123456789
+ADMIN_TELEGRAM_USER_ID=123456789
+SYSTEM_TENANT_ID=TEN_TG_123456789
 AIRTABLE_BASE_ID=appXXXXXXXXXXXXXX
 AIRTABLE_API_KEY=patXXXXXXXXXXXXXX
 EXCHANGE_RATE=3.44
@@ -319,7 +321,7 @@ Para operar, solo necesitas el `Base ID` y un token personal de Airtable con per
 
 ### Estado de ramas y Airtable multiusuario
 
-`main` mantiene la estructura operativa monousuario. `develop` contiene la nueva arquitectura multi-tenant sobre una sola base compartida de Airtable.
+`main` usa la arquitectura multi-tenant sobre una sola base compartida de Airtable. No debe quedar codigo financiero operando sin `TenantID`.
 
 Antes de pasar `develop` a `main`, Airtable debe prepararse con:
 
@@ -328,7 +330,7 @@ Antes de pasar `develop` a `main`, Airtable debe prepararse con:
 - registros actuales del admin rellenados con `TEN_TG_<USER_ID>`
 - campos dinamicos como `Cuenta`, `Categoria`, `CuentaAsociada` y `SaldosHistoricos.Cuenta` configurados como texto, no como select
 
-La guia completa de columnas, tipos y pasos de migracion esta en [docs/airtable-multitenant.md](docs/airtable-multitenant.md).
+La guia completa de columnas, tipos, limpieza de datos legacy y reglas de codigo esta en [docs/airtable-multitenant.md](docs/airtable-multitenant.md).
 
 ### Arquitectura multiusuario objetivo
 
@@ -354,6 +356,8 @@ La configuración de usuarios nuevos debe hacerse desde Telegram, no editando Ai
 Gmail Push y voz quedan desactivados para usuarios nuevos (`GmailEnabled=No`, `VoiceEnabled=No`). Los comandos y callbacks de esas funciones verifican esos flags antes de ejecutarse.
 
 La capa `storage/airtable_store.py` centraliza el acceso multi-tenant a Airtable. Sus operaciones financieras requieren `tenant_id` y agregan/verifican `TenantID` para evitar lecturas o escrituras cruzadas entre usuarios.
+
+Los comandos resuelven el tenant desde Telegram. Los procesos sin usuario directo, como Gmail Push, renovacion del watch, snapshot diario y recordatorios automaticos, usan `SYSTEM_TENANT_ID`.
 
 Comandos admin iniciales:
 

@@ -98,7 +98,7 @@ def _parse_categoria_y_nota(texto: str, categoria_sugerida: str = ""):
     return raw.strip(), ""
 
 
-def _sugerir_categoria_para_pendiente(pendiente_obj: dict) -> str:
+def _sugerir_categoria_para_pendiente(pendiente_obj: dict, tenant_id=None) -> str:
     """Heurística simple para predecir categoría de un pendiente no-deuda."""
     if not pendiente_obj:
         return ""
@@ -136,7 +136,7 @@ def _sugerir_categoria_para_pendiente(pendiente_obj: dict) -> str:
         sugerida = "Sueldo" if tipo == "ingreso" else "Otros"
 
     try:
-        categorias = obtener_categorias("Ingreso" if tipo == "ingreso" else "Gasto")
+        categorias = obtener_categorias("Ingreso" if tipo == "ingreso" else "Gasto", tenant_id=tenant_id)
         if categorias:
             validas = {str(c.get("original", "")).strip().lower(): str(c.get("original", "")).strip() for c in categorias}
             if sugerida.lower() in validas:
@@ -662,7 +662,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
 
     if intent in {"resumen", "deudas", "recordatorios", "categorias"}:
         if intent == "resumen":
-            data = obtener_resumen_cuentas()
+            data = obtener_resumen_cuentas(tenant_id=tenant.tenant_id)
             mensaje = "📊 *Resumen de Cuentas*\n\n"
             for c in data["cuentas"]:
                 mensaje += f"• {c['nombre']} ({c['tipo']}): {c['moneda']} {c['saldo']:,.2f}\n"
@@ -673,7 +673,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             return
 
         if intent == "deudas":
-            deudas_activas = obtener_deudas_activas()
+            deudas_activas = obtener_deudas_activas(tenant_id=tenant.tenant_id)
             if not deudas_activas:
                 await update.effective_message.reply_text("✅ No tienes deudas activas ni vencidas registradas.")
                 return
@@ -709,7 +709,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             return
 
         if intent == "recordatorios":
-            recordatorios = obtener_recordatorios_deudas(dias_alerta=7)
+            recordatorios = obtener_recordatorios_deudas(dias_alerta=7, tenant_id=tenant.tenant_id)
             if not recordatorios:
                 await update.effective_message.reply_text("✅ No hay deudas por vencer en los próximos 7 días.")
                 return
@@ -733,7 +733,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             return
 
         if intent == "categorias":
-            categorias = obtener_categorias()
+            categorias = obtener_categorias(tenant_id=tenant.tenant_id)
             gastos = [c for c in categorias if c["tipo"].lower() == "gasto"]
             ingresos = [c for c in categorias if c["tipo"].lower() == "ingreso"]
 
@@ -784,7 +784,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
         mes = int(payload.get("mes"))
         anio = int(payload.get("anio"))
         if intent == "mes":
-            data = obtener_balance_mes(mes, anio)
+            data = obtener_balance_mes(mes, anio, tenant_id=tenant.tenant_id)
             mensaje = f"📅 *Balance {mes:02d}/{anio}*\n\n"
             mensaje += f"📥 Ingresos: PEN {data['ingresos']:,.2f}\n"
             mensaje += f"📤 Gastos: PEN {data['gastos']:,.2f}\n"
@@ -792,7 +792,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
             return
 
-        datos = obtener_datos_reporte_mensual(mes, anio)
+        datos = obtener_datos_reporte_mensual(mes, anio, tenant_id=tenant.tenant_id)
         if datos["kpis"]["total_transacciones"] == 0:
             await update.effective_message.reply_text(f"ℹ️ No hay transacciones para {mes:02d}/{anio}.")
             return
@@ -808,14 +808,14 @@ async def _ejecutar_payload_voz(payload, update: Update):
         categoria = payload.get("categoria")
         mes = int(payload.get("mes"))
         anio = int(payload.get("anio"))
-        data = obtener_gasto_por_categoria(categoria, mes, anio)
+        data = obtener_gasto_por_categoria(categoria, mes, anio, tenant_id=tenant.tenant_id)
         mensaje = f"📊 *Gasto en {data['categoria']}*\n"
         mensaje += f"📅 {mes:02d}/{anio}: PEN {data['total']:,.2f}"
         await update.effective_message.reply_text(mensaje, parse_mode="Markdown")
         return
 
     if intent == "eliminar":
-        data = eliminar_transaccion(str(payload.get("trans_id")).strip())
+        data = eliminar_transaccion(str(payload.get("trans_id")).strip(), tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(
             f"🗑️ Transacción eliminada\n"
             f"🆔 {data['id']}\n"
@@ -829,6 +829,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             str(payload.get("trans_id")).strip(),
             str(payload.get("campo")).strip(),
             str(payload.get("valor")).strip(),
+            tenant_id=tenant.tenant_id,
         )
         mensaje = (
             f"✏️ Transacción editada\n"
@@ -858,7 +859,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
 
     # gasto por defecto
     cuenta = payload.get("cuenta", "Efectivo")
-    tipo_cuenta = obtener_tipo_cuenta(cuenta)
+    tipo_cuenta = obtener_tipo_cuenta(cuenta, tenant_id=tenant.tenant_id)
     metodo = metodo_por_tipo_cuenta(tipo_cuenta)
     monto = parsear_numero(payload.get("monto"))
     trans_id = add_transaction(
@@ -876,9 +877,10 @@ async def _ejecutar_payload_voz(payload, update: Update):
 
 
 async def _interpretar_y_confirmar(texto, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cuentas = obtener_nombres_cuentas()
-    categorias_gasto = obtener_categorias("Gasto")
-    categorias_ingreso = obtener_categorias("Ingreso")
+    tenant = resolve_tenant_context(update.effective_user.id)
+    cuentas = obtener_nombres_cuentas(tenant_id=tenant.tenant_id)
+    categorias_gasto = obtener_categorias("Gasto", tenant_id=tenant.tenant_id)
+    categorias_ingreso = obtener_categorias("Ingreso", tenant_id=tenant.tenant_id)
 
     payload = interpretar_transcripcion(
         texto=texto,
@@ -1031,6 +1033,7 @@ async def callbacks_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    tenant = resolve_tenant_context(update.effective_user.id)
 
     data = (query.data or "").strip()
     partes = data.split(":")
@@ -1045,7 +1048,7 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if accion == "discard":
         try:
-            resultado = descartar_movimiento_pendiente(pend_id, "Descartado desde botón")
+            resultado = descartar_movimiento_pendiente(pend_id, "Descartado desde botón", tenant_id=tenant.tenant_id)
             context.user_data.pop(PENDING_CONFIRM_KEY, None)
             await query.edit_message_text(f"🗑️ Pendiente descartado: {resultado['pendiente_id']}")
         except ValueError as e:
@@ -1078,7 +1081,6 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
         # Si el pendiente corresponde a pago de tarjeta propia, confirmar directo
         # como pago de deuda sin pedir categoría (flujo no ambiguo).
         try:
-            tenant = resolve_tenant_context(update.effective_user.id)
             pendientes = listar_movimientos_pendientes(limit=200, tenant_id=tenant.tenant_id)
         except Exception:
             pendientes = []
@@ -1122,7 +1124,7 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
         # Asistencia: si hay varias deudas de servicio candidatas, mostrar botones para elegir.
         if pendiente_obj:
             try:
-                candidatas = obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3)
+                candidatas = obtener_candidatas_deuda_servicio_para_pendiente(pendiente_obj, max_items=3, tenant_id=tenant.tenant_id)
             except Exception:
                 candidatas = []
 
@@ -1156,7 +1158,7 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
                 return
 
-        categoria_sugerida = _sugerir_categoria_para_pendiente(pendiente_obj) if pendiente_obj else ""
+        categoria_sugerida = _sugerir_categoria_para_pendiente(pendiente_obj, tenant_id=tenant.tenant_id) if pendiente_obj else ""
         context.user_data[PENDING_CONFIRM_KEY] = {
             "id": pend_id,
             "nota": "",
@@ -1165,7 +1167,7 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
 
         sugerencias = []
         try:
-            sugerencias = [cat.get("original", "") for cat in obtener_categorias("Gasto")[:5]]
+            sugerencias = [cat.get("original", "") for cat in obtener_categorias("Gasto", tenant_id=tenant.tenant_id)[:5]]
         except Exception:
             sugerencias = []
 
@@ -1231,20 +1233,20 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Obtener cuentas reales de la hoja
     try:
-        nombres_cuentas = obtener_nombres_cuentas()
+        nombres_cuentas = obtener_nombres_cuentas(tenant_id=tenant.tenant_id)
         logger.info(f"Cuentas disponibles: {nombres_cuentas}")
     except Exception as e:
         logger.error(f"Error obteniendo cuentas: {e}")
         nombres_cuentas = ["Efectivo"]
 
     # 1. Buscar explícitamente una cuenta en la nota (soporta nombres compuestos)
-    cuenta_info = detectar_cuenta_en_texto(nota)
+    cuenta_info = detectar_cuenta_en_texto(nota, tenant_id=tenant.tenant_id)
     if cuenta_info:
         cuenta = cuenta_info["Nombre"]
         metodo = metodo_por_tipo_cuenta(cuenta_info.get("Tipo"))
     else:
         # 2. Si no se detecta cuenta explícita, conservar fallback y derivar método por tipo real.
-        tipo_cuenta = obtener_tipo_cuenta(cuenta)
+        tipo_cuenta = obtener_tipo_cuenta(cuenta, tenant_id=tenant.tenant_id)
         metodo = metodo_por_tipo_cuenta(tipo_cuenta)
 
     # Si después de todo la cuenta es "Efectivo" pero no existe en la hoja, advertir (pero no falla)
@@ -1318,15 +1320,15 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cuenta = "Efectivo"
     metodo = "Efectivo"
     try:
-        nombres_cuentas = obtener_nombres_cuentas()
+        nombres_cuentas = obtener_nombres_cuentas(tenant_id=tenant.tenant_id)
     except:
         nombres_cuentas = ["Efectivo"]
-    cuenta_info = detectar_cuenta_en_texto(nota)
+    cuenta_info = detectar_cuenta_en_texto(nota, tenant_id=tenant.tenant_id)
     if cuenta_info:
         cuenta = cuenta_info["Nombre"]
         metodo = metodo_por_tipo_cuenta(cuenta_info.get("Tipo"))
     else:
-        tipo_cuenta = obtener_tipo_cuenta(cuenta)
+        tipo_cuenta = obtener_tipo_cuenta(cuenta, tenant_id=tenant.tenant_id)
         metodo = metodo_por_tipo_cuenta(tipo_cuenta)
     try:
         trans_id = add_transaction("Ingreso", monto, moneda, categoria, "", cuenta, metodo, nota, tenant_id=tenant.tenant_id)
@@ -1344,8 +1346,9 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
-        data = obtener_resumen_cuentas()
+        data = obtener_resumen_cuentas(tenant_id=tenant.tenant_id)
     except Exception as e:
         await update.effective_message.reply_text("❌ Error al obtener resumen.")
         logger.error(f"Error resumen: {e}")
@@ -1360,6 +1363,7 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def balance_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     args = context.args
     mes = datetime.now().month
     año = datetime.now().year
@@ -1374,7 +1378,7 @@ async def balance_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     try:
-        data = obtener_balance_mes(mes, año)
+        data = obtener_balance_mes(mes, año, tenant_id=tenant.tenant_id)
     except Exception as e:
         await update.effective_message.reply_text("❌ Error al calcular balance.")
         logger.error(f"Error balance: {e}")
@@ -1387,6 +1391,7 @@ async def balance_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def reporte_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     args = context.args
     mes = datetime.now().month
     año = datetime.now().year
@@ -1404,7 +1409,7 @@ async def reporte_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     try:
-        datos = obtener_datos_reporte_mensual(mes, año)
+        datos = obtener_datos_reporte_mensual(mes, año, tenant_id=tenant.tenant_id)
         if datos["kpis"]["total_transacciones"] == 0:
             await update.effective_message.reply_text(f"ℹ️ No hay transacciones para {mes:02d}/{año}.")
             return
@@ -1421,12 +1426,13 @@ async def reporte_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def gasto_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if not context.args:
         await update.effective_message.reply_text("⚠️ Uso: `/categoria <nombre>`", parse_mode="Markdown")
         return
     categoria = " ".join(context.args)
     try:
-        data = obtener_gasto_por_categoria(categoria)
+        data = obtener_gasto_por_categoria(categoria, tenant_id=tenant.tenant_id)
     except ValueError as e:
         await update.effective_message.reply_text(f"❌ {e}")
         return
@@ -1440,8 +1446,9 @@ async def gasto_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
-        deudas_activas = obtener_deudas_activas()
+        deudas_activas = obtener_deudas_activas(tenant_id=tenant.tenant_id)
     except Exception as e:
         await update.effective_message.reply_text("❌ Error al obtener deudas.")
         logger.error(f"Error deudas: {e}")
@@ -1481,8 +1488,9 @@ async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def listar_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
-        categorias = obtener_categorias()  # lista de dicts con original, tipo, subcategorias
+        categorias = obtener_categorias(tenant_id=tenant.tenant_id)  # lista de dicts con original, tipo, subcategorias
     except Exception as e:
         await update.effective_message.reply_text("❌ Error al obtener categorías.")
         logger.error(f"Error categorias: {e}")
@@ -1517,13 +1525,14 @@ async def listar_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def eliminar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if not context.args:
         await update.effective_message.reply_text("⚠️ Uso: `/eliminar <ID>`", parse_mode="Markdown")
         return
 
     trans_id = context.args[0].strip()
     try:
-        data = eliminar_transaccion(trans_id)
+        data = eliminar_transaccion(trans_id, tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(
             f"🗑️ Transacción eliminada\n"
             f"🆔 {data['id']}\n"
@@ -1538,6 +1547,7 @@ async def eliminar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def editar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if len(context.args) < 3:
         await update.effective_message.reply_text(
             "⚠️ Uso: `/editar <ID> <campo> <valor>`\n"
@@ -1551,7 +1561,7 @@ async def editar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
     valor = " ".join(context.args[2:]).strip()
 
     try:
-        data = editar_transaccion(trans_id, campo, valor)
+        data = editar_transaccion(trans_id, campo, valor, tenant_id=tenant.tenant_id)
         mensaje = (
             f"✏️ Transacción editada\n"
             f"🆔 {data['id']}\n"
@@ -1629,7 +1639,7 @@ async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
         ventana = context.job.data
 
     try:
-        recordatorios = obtener_recordatorios_deudas(dias_alerta=max(7, ventana))
+        recordatorios = obtener_recordatorios_deudas(dias_alerta=max(7, ventana), tenant_id=config.SYSTEM_TENANT_ID)
     except Exception as e:
         logger.error(f"Error generando recordatorios de deuda: {e}")
         return
@@ -1688,7 +1698,7 @@ async def enviar_keepalive(context: ContextTypes.DEFAULT_TYPE):
 
 async def enviar_snapshot_diario(context: ContextTypes.DEFAULT_TYPE):
     try:
-        data = generar_snapshot_saldos(origen="AutoDiario")
+        data = generar_snapshot_saldos(origen="AutoDiario", tenant_id=config.SYSTEM_TENANT_ID)
         logger.info(
             "Snapshot diario generado | id=%s cuentas=%s total_pen=%.2f",
             data.get("snapshot_id"),
@@ -1701,7 +1711,7 @@ async def enviar_snapshot_diario(context: ContextTypes.DEFAULT_TYPE):
 
 async def renovar_watch_gmail_periodico(context: ContextTypes.DEFAULT_TYPE):
     try:
-        data = renovar_watch_si_necesario(force=False)
+        data = renovar_watch_si_necesario(force=False, tenant_id=config.SYSTEM_TENANT_ID)
         logger.info(
             "Gmail watch activo | history_id=%s expiration=%s",
             data.get("historyId") or data.get("history_id"),
@@ -1753,8 +1763,9 @@ async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
-        recordatorios = obtener_recordatorios_deudas(dias_alerta=7)
+        recordatorios = obtener_recordatorios_deudas(dias_alerta=7, tenant_id=tenant.tenant_id)
     except Exception as e:
         logger.error(f"Error consultando recordatorios manuales: {e}")
         await update.effective_message.reply_text("❌ Error al consultar recordatorios.")
@@ -1930,6 +1941,7 @@ async def _confirmar_pendiente_con_categoria(update: Update, context: ContextTyp
 
 @restricted
 async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if not context.args:
         await update.effective_message.reply_text(
             "⚠️ Uso: `/descartar_pendiente <ID> [motivo]`",
@@ -1941,7 +1953,7 @@ async def descartar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
     motivo = " ".join(context.args[1:]).strip() if len(context.args) > 1 else ""
 
     try:
-        data = descartar_movimiento_pendiente(pend_id, motivo)
+        data = descartar_movimiento_pendiente(pend_id, motivo, tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(f"🗑️ Pendiente descartado: {data['pendiente_id']}")
     except ValueError as e:
         await update.effective_message.reply_text(f"❌ {e}")
@@ -1955,6 +1967,7 @@ async def descartar_pendiente_short_cmd(update: Update, context: ContextTypes.DE
 
 @restricted
 async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if len(context.args) < 2:
         await update.effective_message.reply_text(
             "⚠️ Uso: `/conciliar <cuenta> <saldo_real> [moneda]`\n"
@@ -1968,7 +1981,7 @@ async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     moneda = context.args[2].strip().upper() if len(context.args) > 2 else "PEN"
 
     try:
-        data = conciliar_cuenta(cuenta, saldo_real, moneda)
+        data = conciliar_cuenta(cuenta, saldo_real, moneda, tenant_id=tenant.tenant_id)
     except ValueError as e:
         await update.effective_message.reply_text(f"❌ {e}")
         return
@@ -2090,6 +2103,7 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
 @gmail_enabled
 async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra información del refresh token de Gmail."""
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
         # Intentar obtener info del token
         token_actual = config.GMAIL_REFRESH_TOKEN or ""
@@ -2097,7 +2111,7 @@ async def gmail_token_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         
         try:
             from airtable_handler import obtener_estado_gmail_push
-            token_sheets = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN") or ""
+            token_sheets = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN", tenant_id=tenant.tenant_id) or ""
         except Exception:
             pass
         
@@ -2245,7 +2259,7 @@ def main():
 
         if config.GMAIL_PUSH_ENABLED:
             try:
-                watch_data = iniciar_watch_gmail(force=False)
+                watch_data = iniciar_watch_gmail(force=False, tenant_id=config.SYSTEM_TENANT_ID)
                 logger.info(
                     "Gmail Push activado | history_id=%s expiration=%s topic=%s",
                     watch_data.get("historyId") or watch_data.get("history_id"),

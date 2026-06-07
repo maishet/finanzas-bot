@@ -87,7 +87,7 @@ def _credenciales_gmail():
     # Intentar cargar el token desde Airtable primero (permite actualizar sin reinicio)
     refresh_token = None
     try:
-        estado = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN")
+        estado = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN", tenant_id=config.SYSTEM_TENANT_ID)
         if estado:
             refresh_token = estado.strip()
     except Exception:
@@ -453,7 +453,7 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         )
         return None
 
-    cuenta = _detectar_cuenta(texto, obtener_nombres_cuentas(), modo_estricto=True)
+    cuenta = _detectar_cuenta(texto, obtener_nombres_cuentas(tenant_id=config.SYSTEM_TENANT_ID), modo_estricto=True)
     if not cuenta:
         _log_descarte_gmail_push(
             "cuenta_no_detectada",
@@ -629,6 +629,7 @@ async def procesar_notificacion_gmail_push(envelope):
 
 
 def _procesar_notificacion_gmail_push_sync(envelope):
+    tenant_id = config.SYSTEM_TENANT_ID
     if not config.GMAIL_PUSH_ENABLED:
         logger.warning("Gmail Push ignorado porque está deshabilitado en configuración.")
         return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "push deshabilitado"}
@@ -652,14 +653,14 @@ def _procesar_notificacion_gmail_push_sync(envelope):
         )
         return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "email distinto"}
 
-    estado = obtener_estado_gmail_push()
+    estado = obtener_estado_gmail_push(tenant_id=tenant_id)
     last_history_id = str(estado.get("last_history_id", "")).strip()
     if not last_history_id:
         logger.warning(
             "Notificación Gmail descartada porque no existe history inicial | notification_history_id=%s",
             notification_history_id or "—",
         )
-        guardar_estado_gmail_push(last_history_id=notification_history_id or "", last_push_at=datetime.utcnow().isoformat())
+        guardar_estado_gmail_push(tenant_id=tenant_id, last_history_id=notification_history_id or "", last_push_at=datetime.utcnow().isoformat())
         return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "sin history inicial"}
 
     try:
@@ -702,6 +703,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
                 tipo=parsed["tipo"],
                 monto=parsed["monto"],
                 moneda=parsed["moneda"],
+                tenant_id=tenant_id,
             )
             if is_dup:
                 logger.info(
@@ -726,6 +728,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
                 referencia=parsed["referencia"],
                 confianza=parsed["confianza"],
                 observacion=parsed["observacion"],
+                tenant_id=tenant_id,
             )
             nuevos_ids.append(pend_id)
             stats["registrados"] += 1
@@ -747,6 +750,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
             stats["errores"] += 1
 
     guardar_estado_gmail_push(
+        tenant_id=tenant_id,
         last_history_id=current_history_id or notification_history_id or last_history_id,
         last_push_at=datetime.utcnow().isoformat(),
         last_push_message_count=len(mensajes),
