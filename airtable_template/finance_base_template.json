@@ -1,9 +1,215 @@
 {
-  "generated_at": "2026-06-06T03:28:40.970842+00:00",
+  "generated_at": "2026-06-07T17:44:49.872776+00:00",
   "source": "sanitized_airtable_schema",
   "tables": {
+    "Tenants": {
+      "schema": [
+        {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Nombre",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Estado",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Activo"
+              },
+              {
+                "name": "Pendiente"
+              },
+              {
+                "name": "Bloqueado"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Plan",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Personal"
+              },
+              {
+                "name": "Free"
+              },
+              {
+                "name": "Pro"
+              }
+            ]
+          }
+        },
+        {
+          "name": "CreatedAt",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        },
+        {
+          "name": "UpdatedAt",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        }
+      ]
+    },
+    "Usuarios": {
+      "schema": [
+        {
+          "name": "UserID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "TelegramUserID",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Nombre",
+          "type": "singleLineText"
+        },
+        {
+          "name": "Estado",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Pendiente"
+              },
+              {
+                "name": "Activo"
+              },
+              {
+                "name": "Bloqueado"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Rol",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "Admin"
+              },
+              {
+                "name": "Owner"
+              },
+              {
+                "name": "Member"
+              }
+            ]
+          }
+        },
+        {
+          "name": "SetupCompleto",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "No"
+              },
+              {
+                "name": "Si"
+              }
+            ]
+          }
+        },
+        {
+          "name": "GmailEnabled",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "No"
+              },
+              {
+                "name": "Si"
+              }
+            ]
+          }
+        },
+        {
+          "name": "VoiceEnabled",
+          "type": "singleSelect",
+          "options": {
+            "choices": [
+              {
+                "name": "No"
+              },
+              {
+                "name": "Si"
+              }
+            ]
+          }
+        },
+        {
+          "name": "CreatedAt",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        },
+        {
+          "name": "UpdatedAt",
+          "type": "dateTime",
+          "options": {
+            "dateFormat": {
+              "name": "iso",
+              "format": "YYYY-MM-DD"
+            },
+            "timeFormat": {
+              "name": "24hour",
+              "format": "HH:mm"
+            },
+            "timeZone": "client"
+          }
+        }
+      ]
+    },
     "Transacciones": {
       "schema": [
+        {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
         {
           "name": "ID",
           "type": "singleLineText"
@@ -97,6 +303,10 @@
     "Cuentas": {
       "schema": [
         {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
+        {
           "name": "ID",
           "type": "number",
           "options": {
@@ -178,6 +388,10 @@
     "Categorias": {
       "schema": [
         {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
+        {
           "name": "Nombre",
           "type": "singleLineText"
         },
@@ -203,6 +417,10 @@
     },
     "Deudas": {
       "schema": [
+        {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
         {
           "name": "ID",
           "type": "number",
@@ -308,6 +526,10 @@
     },
     "MovimientosPendientes": {
       "schema": [
+        {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
         {
           "name": "ID",
           "type": "singleLineText"
@@ -443,6 +665,10 @@
     "GmailEstado": {
       "schema": [
         {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
+        {
           "name": "Clave",
           "type": "singleLineText"
         },
@@ -469,6 +695,10 @@
     },
     "SaldosHistoricos": {
       "schema": [
+        {
+          "name": "TenantID",
+          "type": "singleLineText"
+        },
         {
           "name": "SnapshotID",
           "type": "singleLineText"
@@ -555,6 +785,8 @@
     }
   },
   "seeds": {
+    "Tenants": [],
+    "Usuarios": [],
     "Transacciones": [],
     "Cuentas": [],
     "Categorias": [
@@ -599,6 +831,7 @@
       },
       {
         "Nombre": "Otros",
+        "Subcategorías": "Recarga",
         "Tipo": "Gasto"
       },
       {
