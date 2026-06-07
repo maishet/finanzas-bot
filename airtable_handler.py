@@ -91,6 +91,35 @@ _SHEET_CACHE = {}
 _CACHE_TTL_SECONDS = 10
 
 
+def _default_tenant_id():
+    return f"TEN_TG_{config.ADMIN_TELEGRAM_USER_ID}"
+
+
+def _resolve_tenant_id(tenant_id=None):
+    return str(tenant_id or _default_tenant_id()).strip()
+
+
+def _headers(worksheet):
+    return list(getattr(worksheet, "headers", []) or [])
+
+
+def _fields_with_tenant(worksheet, fields, tenant_id=None):
+    payload = dict(fields or {})
+    if "TenantID" in _headers(worksheet):
+        payload["TenantID"] = _resolve_tenant_id(tenant_id)
+    return payload
+
+
+def _row_with_tenant(worksheet, values, tenant_id=None):
+    headers = _headers(worksheet)
+    if "TenantID" not in headers:
+        return list(values)
+    fields = {"TenantID": _resolve_tenant_id(tenant_id)}
+    for header, value in zip([h for h in headers if h != "TenantID"], values):
+        fields[header] = value
+    return [fields.get(header, "") for header in headers]
+
+
 def _cache_get(key):
     entry = _SHEET_CACHE.get(key)
     if not entry:
@@ -474,6 +503,7 @@ def registrar_movimiento_pendiente(
     referencia="",
     confianza="",
     observacion="",
+    tenant_id=None,
 ):
     """Registra un movimiento detectado para confirmación posterior."""
     tipo_norm = normalizar_texto(tipo)
@@ -509,18 +539,21 @@ def registrar_movimiento_pendiente(
     if str(observacion).strip():
         fields["Observacion"] = str(observacion).strip()
 
-    airtable_api.create_record("MovimientosPendientes", fields)
+    airtable_api.create_record("MovimientosPendientes", _fields_with_tenant(pend_ws, fields, tenant_id))
     _cache_invalidate("pendientes_values")
     return pend_id
 
 
-def listar_movimientos_pendientes(limit=20, include_resueltos=False):
+def listar_movimientos_pendientes(limit=20, include_resueltos=False, tenant_id=None):
     valores = _leer_values_cacheados(pend_ws, "pendientes_values")
     if not valores or len(valores) <= 1:
         return []
 
     headers = valores[0]
+    tenant_id = _resolve_tenant_id(tenant_id) if "TenantID" in headers else None
     filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)]
+    if tenant_id:
+        filas = [f for f in filas if str(f.get("TenantID", "")).strip() == tenant_id]
     if include_resueltos:
         filas.reverse()
         return filas[: max(1, int(limit))]
@@ -530,14 +563,14 @@ def listar_movimientos_pendientes(limit=20, include_resueltos=False):
     return pendientes[: max(1, int(limit))]
 
 
-def existe_movimiento_pendiente_duplicado(referencia="", cuenta="", tipo="", monto=0, moneda="PEN", limit=500):
+def existe_movimiento_pendiente_duplicado(referencia="", cuenta="", tipo="", monto=0, moneda="PEN", limit=500, tenant_id=None):
     """Detecta duplicados por referencia exacta o, sin referencia, por similitud.
 
     Gmail Push envia referencias estables por Message-ID. Si hay referencia, solo
     debe deduplicarse contra esa referencia exacta; movimientos repetidos con el
     mismo monto (por ejemplo recargas celulares) son transacciones validas.
     """
-    rows = listar_movimientos_pendientes(limit=limit, include_resueltos=True)
+    rows = listar_movimientos_pendientes(limit=limit, include_resueltos=True, tenant_id=tenant_id)
     if not rows:
         return False
 
@@ -577,7 +610,7 @@ def existe_movimiento_pendiente_duplicado(referencia="", cuenta="", tipo="", mon
     return False
 
 
-def _buscar_pendiente_por_id(pendiente_id):
+def _buscar_pendiente_por_id(pendiente_id, tenant_id=None):
     pid = str(pendiente_id or "").strip().upper()
     if not pid:
         return None
@@ -587,8 +620,11 @@ def _buscar_pendiente_por_id(pendiente_id):
         return None
 
     headers = valores[0]
+    tenant_id = _resolve_tenant_id(tenant_id) if "TenantID" in headers else None
     for i, fila in enumerate(valores[1:], start=2):
         reg = dict(zip(headers, fila))
+        if tenant_id and str(reg.get("TenantID", "")).strip() != tenant_id:
+            continue
         if str(reg.get("ID", "")).strip().upper() == pid:
             reg["_row"] = i
             return reg
@@ -730,9 +766,9 @@ def _buscar_deuda_servicio_por_contexto(cuenta_banco, monto, moneda, *textos):
     return candidatos[0][3]
 
 
-def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra=""):
+def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="", tenant_id=None):
     """Convierte un pendiente en transacción real y marca su resolución."""
-    p = _buscar_pendiente_por_id(pendiente_id)
+    p = _buscar_pendiente_por_id(pendiente_id, tenant_id=tenant_id)
     if not p:
         raise ValueError(f"No existe pendiente '{pendiente_id}'.")
 
@@ -768,6 +804,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
                 moneda,
                 cuenta,
                 nota=nota,
+                tenant_id=tenant_id,
             )
             tx_id = pago_res.get("trans_id")
             tipo = "Gasto"
@@ -792,6 +829,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
                 moneda,
                 cuenta,
                 nota=nota,
+                tenant_id=tenant_id,
             )
             tx_id = pago_res.get("trans_id")
             tipo = "Gasto"
@@ -818,6 +856,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
                 moneda,
                 cuenta_origen,
                 nota=nota,
+                tenant_id=tenant_id,
             )
             tx_id = pago_res.get("trans_id")
             cuenta = cuenta_origen
@@ -840,7 +879,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
                 if not source_account:
                     source_account = deuda.get("CuentaAsociada")
                 if source_account and es_cuenta_banco(source_account):
-                    pago_res = pagar_deuda(str(deuda.get("ID", "")).strip(), monto, moneda, source_account, nota)
+                    pago_res = pagar_deuda(str(deuda.get("ID", "")).strip(), monto, moneda, source_account, nota, tenant_id=tenant_id)
                     tx_id = pago_res.get("trans_id")
                     cuenta = source_account
                     tipo = "Gasto"
@@ -855,6 +894,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="")
             cuenta=cuenta,
             metodo=_metodo_por_cuenta(cuenta),
             nota=nota,
+            tenant_id=tenant_id,
         )
 
     row = p["_row"]
@@ -1113,16 +1153,19 @@ def detectar_cuenta_por_ultimos_digitos(ultimos4):
     return None
 
 
-def obtener_estado_gmail_push(clave=None, default=None):
+def obtener_estado_gmail_push(clave=None, default=None, tenant_id=None):
     """Obtiene el estado persistido de Gmail Push como key/value."""
     valores = _leer_values_cacheados(gmail_estado_ws, "gmail_estado_values")
     if not valores or len(valores) <= 1:
         return default if clave else {}
 
     headers = valores[0]
+    tenant_id = _resolve_tenant_id(tenant_id) if "TenantID" in headers else None
     filas = [dict(zip(headers, f)) for f in valores[1:] if any(str(c).strip() for c in f)]
     estado = {}
     for fila in filas:
+        if tenant_id and str(fila.get("TenantID", "")).strip() != tenant_id:
+            continue
         k = str(fila.get("Clave", "")).strip()
         if k:
             estado[k] = str(fila.get("Valor", "")).strip()
@@ -1132,9 +1175,40 @@ def obtener_estado_gmail_push(clave=None, default=None):
     return estado.get(clave, default)
 
 
-def guardar_estado_gmail_push(**campos):
+def guardar_estado_gmail_push(tenant_id=None, **campos):
     """Crea o actualiza claves de estado para Gmail Push."""
     if not campos:
+        return
+
+    tenant_id = _resolve_tenant_id(tenant_id)
+    headers_actuales = _headers(gmail_estado_ws)
+    if "TenantID" in headers_actuales:
+        ahora = get_now().isoformat(timespec="seconds")
+        records = airtable_api.list_records("GmailEstado")
+        indice = {}
+        for record in records:
+            fields = record.get("fields", {}) or {}
+            if str(fields.get("TenantID", "")).strip() != tenant_id:
+                continue
+            clave_actual = str(fields.get("Clave", "")).strip()
+            if clave_actual:
+                indice[clave_actual] = record.get("id")
+
+        for clave, valor in campos.items():
+            clave_txt = str(clave).strip()
+            valor_txt = str(valor)
+            payload = {
+                "TenantID": tenant_id,
+                "Clave": clave_txt,
+                "Valor": valor_txt,
+                "ActualizadoEn": ahora,
+            }
+            record_id = indice.get(clave_txt)
+            if record_id:
+                airtable_api.update_record("GmailEstado", record_id, payload)
+            else:
+                airtable_api.create_record("GmailEstado", payload)
+        _cache_invalidate("gmail_estado_values")
         return
 
     valores = _leer_values_cacheados(gmail_estado_ws, "gmail_estado_values")
@@ -1882,7 +1956,7 @@ def obtener_saldo_actual_cuenta(nombre_cuenta):
     return parsear_numero(cuenta.get("SaldoActual", 0))
 
 # ---------- TRANSACCIONES ----------
-def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuenta="Efectivo", metodo="Efectivo", nota="", fecha=None):
+def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuenta="Efectivo", metodo="Efectivo", nota="", fecha=None, tenant_id=None):
     sincronizar_estado_deudas()
 
     # Resolver categoría y subcategoría
@@ -1930,7 +2004,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
         deuda_id
     ]
     
-    trans_ws.append_row(nueva_fila, value_input_option="RAW")
+    trans_ws.append_row(_row_with_tenant(trans_ws, nueva_fila, tenant_id), value_input_option="RAW")
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
     logger.info(f"Transacción {trans_id}: {tipo} {monto} {moneda} -> {categoria_original} / {subcategoria}")
 
@@ -1953,7 +2027,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
     actualizar_saldo_cuenta(cuenta_final, tipo, monto_pen)
     return trans_id
 
-def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
+def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=None):
     """
     Registra un pago de deuda usando una cuenta de tipo Banco.
     - Aumenta MontoPagado en Deudas
@@ -2106,14 +2180,14 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
                 payload["FechaCorte"] = fecha_corte_nueva_iso or deuda.get("FechaCorte", "")
 
             try:
-                airtable_api.create_record("Deudas", payload)
+                airtable_api.create_record("Deudas", _fields_with_tenant(deudas_ws, payload, tenant_id))
             except Exception as e:
                 err_txt = str(e)
                 # Algunas bases tienen Deudas.ID como autonumber/formula/read-only.
                 # En ese caso reintentamos crear la fila sin enviar ID.
                 if "Field \"ID\" cannot accept the provided value" in err_txt or "HTTP Error 422" in err_txt:
                     payload.pop("ID", None)
-                    airtable_api.create_record("Deudas", payload)
+                    airtable_api.create_record("Deudas", _fields_with_tenant(deudas_ws, payload, tenant_id))
                 else:
                     raise
             _cache_invalidate("deudas_records")
@@ -2149,7 +2223,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota=""):
         (moneda_pago or "PEN").upper(),
         deuda_id_str,
     )
-    trans_ws.append_row(fila, value_input_option="RAW")
+    trans_ws.append_row(_row_with_tenant(trans_ws, fila, tenant_id), value_input_option="RAW")
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
 
     # Descontar saldo del banco.
@@ -2412,7 +2486,7 @@ def _siguiente_id_snapshot():
     return f"SH{int(next_num):05d}"
 
 
-def generar_snapshot_saldos(origen="Manual", fecha=None):
+def generar_snapshot_saldos(origen="Manual", fecha=None, tenant_id=None):
     """Guarda una foto de saldos actuales por cuenta en SaldosHistoricos."""
     fecha_dt = parsear_fecha(fecha) if fecha else None
     if fecha_dt is None:
@@ -2461,7 +2535,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None):
 
     if filas:
         for fila in filas:
-            snap_ws.append_row(fila, value_input_option="RAW")
+            snap_ws.append_row(_row_with_tenant(snap_ws, fila, tenant_id), value_input_option="RAW")
 
     return {
         "snapshot_id": snapshot_id,

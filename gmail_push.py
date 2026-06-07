@@ -582,13 +582,13 @@ def _obtener_mensajes_desde_historial(start_history_id):
     return salida, current_history_id
 
 
-def iniciar_watch_gmail(force=False):
+def iniciar_watch_gmail(force=False, tenant_id=None):
     if not config.GMAIL_PUSH_ENABLED:
         raise GmailPushError("La ingesta Gmail Push está desactivada. Activa GMAIL_PUSH_ENABLED=true.")
     if not config.GMAIL_PUSH_TOPIC_NAME:
         raise GmailPushError("Falta GMAIL_PUSH_TOPIC_NAME para registrar el watch.")
 
-    estado = obtener_estado_gmail_push()
+    estado = obtener_estado_gmail_push(tenant_id=tenant_id)
     if not force:
         expiracion = estado.get("watch_expiration", "")
         if expiracion:
@@ -609,6 +609,7 @@ def iniciar_watch_gmail(force=False):
     expiration = str(response.get("expiration", "")).strip()
 
     guardar_estado_gmail_push(
+        tenant_id=tenant_id,
         last_history_id=history_id,
         watch_expiration=expiration,
         watch_email=config.GMAIL_USER_EMAIL or "",
@@ -619,8 +620,8 @@ def iniciar_watch_gmail(force=False):
     return response
 
 
-def renovar_watch_si_necesario(force=False):
-    return iniciar_watch_gmail(force=force)
+def renovar_watch_si_necesario(force=False, tenant_id=None):
+    return iniciar_watch_gmail(force=force, tenant_id=tenant_id)
 
 
 async def procesar_notificacion_gmail_push(envelope):
@@ -756,8 +757,8 @@ def _procesar_notificacion_gmail_push_sync(envelope):
     return stats
 
 
-def obtener_estado_gmail_push_resumido():
-    estado = obtener_estado_gmail_push()
+def obtener_estado_gmail_push_resumido(tenant_id=None):
+    estado = obtener_estado_gmail_push(tenant_id=tenant_id)
     return {
         "last_history_id": estado.get("last_history_id", ""),
         "watch_expiration": estado.get("watch_expiration", ""),

@@ -657,6 +657,7 @@ def _keyboard_confirmacion_voz():
 
 
 async def _ejecutar_payload_voz(payload, update: Update):
+    tenant = resolve_tenant_context(update.effective_user.id)
     intent = payload.get("intent")
 
     if intent in {"resumen", "deudas", "recordatorios", "categorias"}:
@@ -765,6 +766,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             moneda_pago=payload.get("moneda", "PEN"),
             cuenta_banco=payload.get("cuenta", ""),
             nota=payload.get("raw_text", ""),
+            tenant_id=tenant.tenant_id,
         )
         await update.effective_message.reply_text(
             f"✅ Pago de deuda registrado\n"
@@ -849,6 +851,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
             payload.get("cuenta", "Efectivo"),
             "Transferencia" if payload.get("cuenta", "Efectivo") != "Efectivo" else "Efectivo",
             payload.get("raw_text", ""),
+            tenant_id=tenant.tenant_id,
         )
         await update.effective_message.reply_text(f"✅ Ingreso registrado. 🆔 {trans_id}")
         return
@@ -867,6 +870,7 @@ async def _ejecutar_payload_voz(payload, update: Update):
         cuenta,
         metodo,
         payload.get("raw_text", ""),
+        tenant_id=tenant.tenant_id,
     )
     await update.effective_message.reply_text(f"✅ Gasto registrado. 🆔 {trans_id}")
 
@@ -1074,7 +1078,8 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
         # Si el pendiente corresponde a pago de tarjeta propia, confirmar directo
         # como pago de deuda sin pedir categoría (flujo no ambiguo).
         try:
-            pendientes = listar_movimientos_pendientes(limit=200)
+            tenant = resolve_tenant_context(update.effective_user.id)
+            pendientes = listar_movimientos_pendientes(limit=200, tenant_id=tenant.tenant_id)
         except Exception:
             pendientes = []
 
@@ -1182,6 +1187,7 @@ async def callbacks_pendientes(update: Update, context: ContextTypes.DEFAULT_TYP
 
 @restricted
 async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     texto = update.effective_message.text.replace("/gasto", "").strip()
     if not texto:
         await update.effective_message.reply_text("⚠️ Uso: `/gasto <monto> <categoría> [nota]`", parse_mode="Markdown")
@@ -1254,7 +1260,8 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             subcategoria="",
             cuenta=cuenta,
             metodo=metodo,
-            nota=nota
+            nota=nota,
+            tenant_id=tenant.tenant_id,
         )
         await update.effective_message.reply_text(
             f"✅ Gasto: {moneda} {monto:.2f}\n"
@@ -1271,6 +1278,7 @@ async def procesar_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     texto = update.effective_message.text.replace("/ingreso", "").strip()
     if not texto:
         await update.effective_message.reply_text("⚠️ Uso: `/ingreso <monto> <categoría> [nota]`", parse_mode="Markdown")
@@ -1321,7 +1329,7 @@ async def procesar_ingreso(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tipo_cuenta = obtener_tipo_cuenta(cuenta)
         metodo = metodo_por_tipo_cuenta(tipo_cuenta)
     try:
-        trans_id = add_transaction("Ingreso", monto, moneda, categoria, "", cuenta, metodo, nota)
+        trans_id = add_transaction("Ingreso", monto, moneda, categoria, "", cuenta, metodo, nota, tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(
             f"✅ Ingreso registrado: {moneda} {monto:.2f} en {categoria}\n"
             f"📝 {nota if nota else '—'}\n"
@@ -1560,6 +1568,7 @@ async def editar_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if len(context.args) < 3:
         await update.effective_message.reply_text(
             "⚠️ Uso: `/pagar <deuda_id> <monto> <cuenta_banco> [nota]`\n"
@@ -1587,6 +1596,7 @@ async def pagar_deuda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             moneda_pago="PEN",
             cuenta_banco=cuenta_banco,
             nota=nota,
+            tenant_id=tenant.tenant_id,
         )
         await update.effective_message.reply_text(
             f"✅ Pago de deuda registrado\n"
@@ -1706,8 +1716,9 @@ async def renovar_watch_gmail_periodico(context: ContextTypes.DEFAULT_TYPE):
 @restricted
 @gmail_enabled
 async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
-        data = iniciar_watch_gmail(force=True)
+        data = iniciar_watch_gmail(force=True, tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(
             "📡 Gmail Push activado\n"
             f"HistoryId: {data.get('historyId', '—')}\n"
@@ -1724,7 +1735,8 @@ async def gmail_watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @restricted
 @gmail_enabled
 async def gmail_estado_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    estado = obtener_estado_gmail_push_resumido()
+    tenant = resolve_tenant_context(update.effective_user.id)
+    estado = obtener_estado_gmail_push_resumido(tenant_id=tenant.tenant_id)
     mensaje = (
         "📮 *Estado Gmail Push*\n"
         f"• Active email: {config.GMAIL_USER_EMAIL or '—'}\n"
@@ -1773,6 +1785,7 @@ async def recordatorios_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     if len(context.args) < 4:
         await update.effective_message.reply_text(
             "⚠️ Uso: `/pendiente <tipo> <monto> <cuenta> <descripcion>`\n"
@@ -1794,6 +1807,7 @@ async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
             descripcion=descripcion,
             fuente="ManualTelegram",
             moneda="PEN",
+            tenant_id=tenant.tenant_id,
         )
         await update.effective_message.reply_text(f"📝 Pendiente registrado: {pend_id}")
     except ValueError as e:
@@ -1813,6 +1827,7 @@ async def registrar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
 
 @restricted
 async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     limit = 10
     if context.args:
         try:
@@ -1821,7 +1836,7 @@ async def listar_pendientes_cmd(update: Update, context: ContextTypes.DEFAULT_TY
             pass
 
     try:
-        pendientes = listar_movimientos_pendientes(limit=limit)
+        pendientes = listar_movimientos_pendientes(limit=limit, tenant_id=tenant.tenant_id)
     except Exception as e:
         logger.error(f"Error listando pendientes: {e}")
         await update.effective_message.reply_text("❌ Error al listar pendientes.")
@@ -1879,7 +1894,8 @@ async def confirmar_pendiente_cmd(update: Update, context: ContextTypes.DEFAULT_
     nota = " ".join(context.args[2:]).strip() if len(context.args) > 2 else ""
 
     try:
-        data = confirmar_movimiento_pendiente(pend_id, categoria, nota)
+        tenant = resolve_tenant_context(update.effective_user.id)
+        data = confirmar_movimiento_pendiente(pend_id, categoria, nota, tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(
             f"✅ Pendiente confirmado\n"
             f"🆔 Pendiente: {data['pendiente_id']}\n"
@@ -1898,7 +1914,8 @@ async def confirmar_pendiente_short_cmd(update: Update, context: ContextTypes.DE
 
 
 async def _confirmar_pendiente_con_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, pend_id: str, categoria: str, nota: str = ""):
-    data = confirmar_movimiento_pendiente(pend_id, categoria, nota)
+    tenant = resolve_tenant_context(update.effective_user.id)
+    data = confirmar_movimiento_pendiente(pend_id, categoria, nota, tenant_id=tenant.tenant_id)
     msg = (
         f"✅ Pendiente confirmado\n"
         f"🆔 Pendiente: {data['pendiente_id']}\n"
@@ -1984,8 +2001,9 @@ async def conciliar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def snapshot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tenant = resolve_tenant_context(update.effective_user.id)
     try:
-        data = generar_snapshot_saldos(origen="ManualTelegram")
+        data = generar_snapshot_saldos(origen="ManualTelegram", tenant_id=tenant.tenant_id)
         await update.effective_message.reply_text(
             f"📸 Snapshot guardado\n"
             f"🆔 {data['snapshot_id']}\n"
@@ -2038,6 +2056,7 @@ async def gmail_regenerate_token_cmd(update: Update, context: ContextTypes.DEFAU
 @gmail_enabled
 async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para actualizar el GMAIL_REFRESH_TOKEN sin reiniciar."""
+    tenant = resolve_tenant_context(update.effective_user.id)
     if not context.args:
         await update.effective_message.reply_text(
             "⚠️ Uso: `/setear_gmail_token <nuevo_token>`\n\n"
@@ -2053,7 +2072,7 @@ async def setear_gmail_token_cmd(update: Update, context: ContextTypes.DEFAULT_T
 
     try:
         # Guardar el nuevo token en Airtable bajo clave "GMAIL_REFRESH_TOKEN"
-        guardar_estado_gmail_push(GMAIL_REFRESH_TOKEN=nuevo_token)
+        guardar_estado_gmail_push(tenant_id=tenant.tenant_id, GMAIL_REFRESH_TOKEN=nuevo_token)
         # Actualizar en la configuración actual
         config.GMAIL_REFRESH_TOKEN = nuevo_token
         # Limpiar el flag de error anterior si existía (no lo tenemos ahora, pero podría reutilizarse)
