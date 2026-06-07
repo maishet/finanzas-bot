@@ -731,7 +731,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
         except GmailPushError as e:
             error_txt = str(e)
             if "404" in error_txt and "not found" in error_txt.lower():
-                logger.warning(
+                logger.info(
                     "Mensaje Gmail %s omitido porque Gmail API ya no lo encuentra | error=%s",
                     message_id,
                     error_txt,

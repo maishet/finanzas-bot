@@ -531,21 +531,30 @@ def listar_movimientos_pendientes(limit=20, include_resueltos=False):
 
 
 def existe_movimiento_pendiente_duplicado(referencia="", cuenta="", tipo="", monto=0, moneda="PEN", limit=500):
-    """Detecta duplicados por referencia exacta o por similitud cuenta/tipo/monto."""
+    """Detecta duplicados por referencia exacta o, sin referencia, por similitud.
+
+    Gmail Push envia referencias estables por Message-ID. Si hay referencia, solo
+    debe deduplicarse contra esa referencia exacta; movimientos repetidos con el
+    mismo monto (por ejemplo recargas celulares) son transacciones validas.
+    """
     rows = listar_movimientos_pendientes(limit=limit, include_resueltos=True)
     if not rows:
         return False
 
     referencia_norm = str(referencia or "").strip().lower()
-    cuenta_norm = normalizar_texto(cuenta)
-    tipo_norm = normalizar_texto(tipo)
-    monto_pen = convertir_a_pen(parsear_numero(monto), moneda)
-
     for r in rows:
         ref_row = str(r.get("Referencia", "")).strip().lower()
         if referencia_norm and ref_row == referencia_norm:
             return True
 
+    if referencia_norm:
+        return False
+
+    cuenta_norm = normalizar_texto(cuenta)
+    tipo_norm = normalizar_texto(tipo)
+    monto_pen = convertir_a_pen(parsear_numero(monto), moneda)
+
+    for r in rows:
         if not (cuenta_norm and tipo_norm):
             continue
 
