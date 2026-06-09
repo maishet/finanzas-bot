@@ -123,6 +123,11 @@ def _tenant_cache_key(cache_key, tenant_id=None):
     return f"{cache_key}:{tenant_id}" if tenant_id else cache_key
 
 
+def _update_row_fields(worksheet, row, fields):
+    record = worksheet._record_for_row(row)
+    return airtable_api.update_record(worksheet.title, record["id"], dict(fields or {}))
+
+
 def _cache_get(key):
     entry = _SHEET_CACHE.get(key)
     if not entry:
@@ -1373,7 +1378,7 @@ def sincronizar_estado_deudas(fecha_referencia=None, tenant_id=None):
             nuevo_estado = "Activa"
 
         if normalizar_texto(nuevo_estado) != estado_norm:
-            deudas_ws.update_cell(row, 8, nuevo_estado)
+            _update_row_fields(deudas_ws, row, {"Estado": nuevo_estado})
 
 def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None, tenant_id=None):
     """
@@ -1641,11 +1646,7 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
         if normalizar_texto(h) == normalizar_texto("MontoTotal"):
             col_idx = idx
             break
-    if col_idx:
-        deudas_ws.update_cell(row, col_idx, nuevo_total)
-    else:
-        # Fallback a D{row}
-        deudas_ws.update(f"D{row}", [[nuevo_total]], value_input_option="RAW")
+    _update_row_fields(deudas_ws, row, {"MontoTotal": nuevo_total})
 
     _cache_invalidate("deudas_records")
 
@@ -1697,7 +1698,7 @@ def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta, tenant_id=None):
     if nuevo_total < 0:
         nuevo_total = 0.0
 
-    deudas_ws.update(f"D{row}", [[nuevo_total]], value_input_option="RAW")
+    _update_row_fields(deudas_ws, row, {"MontoTotal": nuevo_total})
     _cache_invalidate("deudas_records")
     logger.info(
         "Deuda ajuste | id=%s fila=%s actual=%.2f delta=%.2f %s convertido=%.2f %s nuevo=%.2f",
@@ -1729,17 +1730,7 @@ def ajustar_pago_deuda(deuda_id, delta_pago, moneda_delta, tenant_id=None):
     if nuevo_pagado < 0:
         nuevo_pagado = 0.0
 
-    headers = deudas_ws.row_values(1)
-    col_idx = None
-    for idx, h in enumerate(headers, start=1):
-        if normalizar_texto(h) == normalizar_texto("MontoPagado"):
-            col_idx = idx
-            break
-
-    if col_idx:
-        deudas_ws.update_cell(row, col_idx, nuevo_pagado)
-    else:
-        deudas_ws.update(f"F{row}", [[nuevo_pagado]], value_input_option="RAW")
+    _update_row_fields(deudas_ws, row, {"MontoPagado": nuevo_pagado})
 
     _cache_invalidate("deudas_records")
     logger.info(
@@ -1776,7 +1767,8 @@ def _aplicar_reversa_saldo(tipo, cuenta, monto, moneda, tenant_id=None):
     if normalizar_texto(tipo) == "ingreso":
         return actualizar_saldo_cuenta(cuenta, "gasto", monto_pen, tenant_id=tenant_id)
     return actualizar_saldo_cuenta(cuenta, "ingreso", monto_pen, tenant_id=tenant_id)
-    pend_ws.update(f"J{row}:N{row}", [["Confirmado", "", tx_id, ahora, nota_extra]], value_input_option="RAW")
+
+
 def _aplicar_saldo(tipo, cuenta, monto, moneda, tenant_id=None):
     monto_pen = convertir_a_pen(parsear_numero(monto), moneda)
     return actualizar_saldo_cuenta(cuenta, tipo, monto_pen, tenant_id=tenant_id)
@@ -1900,20 +1892,19 @@ def editar_transaccion(trans_id, campo, nuevo_valor, tenant_id=None):
 
     _aplicar_saldo(nuevo["tipo"], nuevo["cuenta"], nuevo["monto"], nuevo["moneda"], tenant_id=tenant_id)
 
-    fila = [[
-        nuevo["id"],
-        nuevo["fecha"],
-        nuevo["tipo"],
-        round(float(nuevo["monto"]), 2),
-        nuevo["moneda"],
-        nuevo["categoria"],
-        nuevo["subcategoria"],
-        nuevo["cuenta"],
-        nuevo["metodo"],
-        nuevo["nota"],
-        nuevo_deuda_id,
-    ]]
-    trans_ws.update(f"A{row}:K{row}", fila, value_input_option="RAW")
+    _update_row_fields(trans_ws, row, {
+        "ID": nuevo["id"],
+        "Fecha": nuevo["fecha"],
+        "Tipo": nuevo["tipo"],
+        "Monto": round(float(nuevo["monto"]), 2),
+        "Moneda": nuevo["moneda"],
+        "Categoría": nuevo["categoria"],
+        "Subcategoría": nuevo["subcategoria"],
+        "Cuenta": nuevo["cuenta"],
+        "Método": nuevo["metodo"],
+        "Nota": nuevo["nota"],
+        "DeudaID": nuevo_deuda_id,
+    })
     _cache_invalidate("transacciones_records", "cuentas_records", "deudas_records")
     sincronizar_estado_deudas(tenant_id=tenant_id)
 
@@ -1930,13 +1921,8 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen, tenant_i
         logger.warning(f"Cuenta '{nombre_cuenta}' no encontrada. No se actualizará saldo.")
         return False
 
-    fila = cuenta["_row"]
     saldo_cache = parsear_numero(cuenta.get("SaldoActual", 0))
     saldo_actual = saldo_cache
-
-    celda_saldo = _leer_celda_formateada("Cuentas", f"F{fila}")
-    if celda_saldo is not None and str(celda_saldo).strip() != "":
-        saldo_actual = parsear_numero(celda_saldo)
 
     tipo_norm = normalizar_texto(tipo_transaccion)
     tipo_cuenta = normalizar_texto(cuenta.get("Tipo", ""))
@@ -1962,18 +1948,17 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen, tenant_i
     nuevo_saldo = round(nuevo_saldo, 2)
     # Registrar en log el detalle de la operación antes de escribir en Airtable
     logger.info(
-        "Actualizar saldo | cuenta=%s fila=F%s tipo=%s monto=%.2f PEN inicial=%.2f final=%.2f cache=%.2f celda='%s'",
+        "Actualizar saldo | cuenta=%s row=%s tipo=%s monto=%.2f PEN inicial=%.2f final=%.2f cache=%.2f",
         nombre_cuenta,
-        fila,
+        cuenta.get("_row"),
         tipo_transaccion,
         monto_pen,
         saldo_actual,
         nuevo_saldo,
         saldo_cache,
-        celda_saldo,
     )
 
-    cuentas_ws.update(f"F{fila}", [[nuevo_saldo]], value_input_option="RAW")
+    _update_row_fields(cuentas_ws, cuenta["_row"], {"SaldoActual": nuevo_saldo})
     _cache_invalidate("cuentas_records")
     logger.debug(f"Saldo de '{nombre_cuenta}' escrito en hoja: {saldo_actual} -> {nuevo_saldo}")
     return True
@@ -1982,17 +1967,6 @@ def obtener_saldo_actual_cuenta(nombre_cuenta, tenant_id=None):
     cuenta = obtener_cuenta_por_nombre(nombre_cuenta, tenant_id=tenant_id)
     if not cuenta:
         return None
-    fila = cuenta.get("_row")
-    if fila:
-        try:
-            # Usar FORMATTED_VALUE para obtener el texto tal como aparece en Airtable
-            celda_saldo = cuentas_ws.acell(f"F{fila}", value_render_option="FORMATTED_VALUE").value
-            if celda_saldo is not None and str(celda_saldo).strip() != "":
-                return parsear_numero(celda_saldo)
-        except Exception:
-            # Fallback al valor cacheado si la lectura formateada falla
-            pass
-
     return parsear_numero(cuenta.get("SaldoActual", 0))
 
 # ---------- TRANSACCIONES ----------
@@ -2140,7 +2114,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     # Actualizar MontoPagado en la deuda y reducir la deuda pendiente de la cuenta asociada.
     nuevo_pagado = round(monto_pagado + pago_en_moneda_deuda, 2)
     logger.info(
-        "Pago deuda | deuda_id=%s fila=F%s pagado_actual=%.2f pago_registrado=%.2f pagado_nuevo=%.2f moneda=%s",
+        "Pago deuda | deuda_id=%s row=%s pagado_actual=%.2f pago_registrado=%.2f pagado_nuevo=%.2f moneda=%s",
         deuda_id_str,
         row_deuda,
         monto_pagado,
@@ -2148,7 +2122,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
         nuevo_pagado,
         moneda_deuda,
     )
-    deudas_ws.update(f"F{row_deuda}", [[nuevo_pagado]], value_input_option="RAW")
+    _update_row_fields(deudas_ws, row_deuda, {"MontoPagado": nuevo_pagado})
     _cache_invalidate("deudas_records")
     cuenta_asociada = str(deuda.get("CuentaAsociada", "")).strip()
     if cuenta_asociada:
@@ -2173,8 +2147,8 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     pendiente_nuevo = round(monto_total - nuevo_pagado, 2)
     if pendiente_nuevo <= 0:
         # Marcar actual como Pagada
-        logger.info("Marcar deuda pagada | deuda_id=%s fila=H%s", deuda_id_str, row_deuda)
-        deudas_ws.update(f"H{row_deuda}", [["Pagada"]], value_input_option="RAW")
+        logger.info("Marcar deuda pagada | deuda_id=%s row=%s", deuda_id_str, row_deuda)
+        _update_row_fields(deudas_ws, row_deuda, {"Estado": "Pagada"})
         # Determinar si la deuda debe recrearse como siguiente ciclo.
         tipo_norm = normalizar_texto(deuda.get("Tipo", ""))
         recurrente_flag = str(deuda.get("Recurrente", "")).strip().lower()
