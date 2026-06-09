@@ -426,16 +426,28 @@ def convertir_moneda(monto, moneda_origen, moneda_destino):
     raise ValueError(f"Conversión de moneda no soportada: {origen} -> {destino}")
 
 # ---------- FUNCIONES BÁSICAS ----------
-def obtener_siguiente_id(worksheet, prefix="TX"):
-    """Devuelve el siguiente correlativo basado en el máximo ID existente, no en la última fila."""
+def _id_field_for_worksheet(worksheet):
+    if worksheet.title == "SaldosHistoricos":
+        return "SnapshotID"
+    return "ID"
+
+
+def obtener_siguiente_id(worksheet, prefix="TX", id_field=None, tenant_id=None):
+    """Devuelve el siguiente correlativo basado en el campo ID real, no en columnas."""
     try:
-        col_a = worksheet.col_values(1)
-        if len(col_a) <= 1:
-            return 1
+        id_field = id_field or _id_field_for_worksheet(worksheet)
+        headers = _headers(worksheet)
+        if "TenantID" in headers:
+            tenant_id = _require_tenant_id(tenant_id)
 
         max_num = 0
         pref = str(prefix or "").upper()
-        for raw in col_a[1:]:
+        data_rows = 0
+        for record in worksheet.get_all_records():
+            if tenant_id and str(record.get("TenantID", "")).strip() != tenant_id:
+                continue
+            data_rows += 1
+            raw = record.get(id_field, "")
             txt = str(raw or "").strip().upper()
             if not txt:
                 continue
@@ -449,17 +461,10 @@ def obtener_siguiente_id(worksheet, prefix="TX"):
         if max_num > 0:
             return max_num + 1
 
-        # Fallback de compatibilidad: correlativo por cantidad de filas con datos.
-        data_rows = sum(1 for v in col_a[1:] if str(v or "").strip())
         return max(1, data_rows + 1)
     except Exception as e:
         logger.error(f"Error obteniendo siguiente ID: {e}")
-        try:
-            col_a = worksheet.col_values(1)
-            data_rows = sum(1 for v in col_a[1:] if str(v or "").strip())
-            return max(1, data_rows + 1)
-        except Exception:
-            return 1
+        return 1
 
 def convertir_a_pen(monto, moneda):
     if moneda.upper() == "PEN":
@@ -519,8 +524,8 @@ def _metodo_compatible_airtable(metodo):
     return choices[0]
 
 
-def _siguiente_id_pendiente():
-    next_num = obtener_siguiente_id(pend_ws, prefix="MP")
+def _siguiente_id_pendiente(tenant_id=None):
+    next_num = obtener_siguiente_id(pend_ws, prefix="MP", id_field="ID", tenant_id=tenant_id)
     return f"MP{int(next_num):05d}"
 
 
@@ -550,7 +555,7 @@ def registrar_movimiento_pendiente(
     if not cuenta_info:
         raise ValueError(f"Cuenta '{cuenta}' no existe.")
 
-    pend_id = _siguiente_id_pendiente()
+    pend_id = _siguiente_id_pendiente(tenant_id=tenant_id)
     fecha_detectada = get_now().isoformat(timespec="seconds")
 
     fields = {
@@ -1480,7 +1485,7 @@ def _buscar_deuda_por_periodo(nombre_cuenta, periodo, tenant_id=None):
 
 def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None, tipo="credito", moneda="PEN", tenant_id=None):
     """Crea una nueva fila en Deudas para el periodo indicado con montos iniciales 0."""
-    next_id = _siguiente_id_deuda()
+    next_id = _siguiente_id_deuda(tenant_id=tenant_id)
     deuda_id = str(next_id)
     descripcion = descripcion or f"Deuda {nombre_cuenta} {periodo}"
     # Construir un diccionario según headers de la hoja Deudas para mantener compatibilidad
@@ -1679,8 +1684,8 @@ def obtener_deuda_por_id(deuda_id, tenant_id=None):
             return d
     return None
 
-def _siguiente_id_deuda():
-    return int(obtener_siguiente_id(deudas_ws, prefix=""))
+def _siguiente_id_deuda(tenant_id=None):
+    return int(obtener_siguiente_id(deudas_ws, prefix="", id_field="ID", tenant_id=tenant_id))
 
 def ajustar_monto_deuda(deuda_id, delta_monto, moneda_delta, tenant_id=None):
     """Ajusta MontoTotal de una deuda por ID. delta positivo suma, negativo resta."""
@@ -1981,7 +1986,7 @@ def add_transaction(tipo, monto, moneda, categoria_input, subcategoria="", cuent
         subcategoria = subcategoria_resuelta
     
     monto_pen = convertir_a_pen(monto, moneda)
-    next_id_num = obtener_siguiente_id(trans_ws)
+    next_id_num = obtener_siguiente_id(trans_ws, prefix="TX", id_field="ID", tenant_id=tenant_id)
     trans_id = f"TX{next_id_num:05d}"
     
     fecha_dt = parsear_fecha(fecha)
@@ -2156,7 +2161,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
         nueva_deuda_id = None
         if es_recurrente:
             # Crear nueva fila de deuda para el siguiente ciclo
-            next_id = _siguiente_id_deuda()
+            next_id = _siguiente_id_deuda(tenant_id=tenant_id)
             nueva_deuda_id = str(next_id)
             nueva_deuda_id_num = next_id
             nueva_fecha_venc_iso = fecha_venc_nueva.strftime("%Y-%m-%d") if fecha_venc_nueva else ""
@@ -2213,7 +2218,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
     # y (si corresponde) se cree la nueva fila para el siguiente ciclo.
 
     # Registrar transacción del pago de deuda.
-    trans_id = f"TX{obtener_siguiente_id(trans_ws):05d}"
+    trans_id = f"TX{obtener_siguiente_id(trans_ws, prefix='TX', id_field='ID', tenant_id=tenant_id):05d}"
     fecha = get_now().isoformat(timespec="seconds")
     nota_final = f"Pago deuda {deuda_id_str}: {descripcion}"
     if nota:
@@ -2484,8 +2489,8 @@ def _valor_campo(registro, *keys, default=""):
     return default
 
 
-def _siguiente_id_snapshot():
-    next_num = obtener_siguiente_id(snap_ws, prefix="SH")
+def _siguiente_id_snapshot(tenant_id=None):
+    next_num = obtener_siguiente_id(snap_ws, prefix="SH", id_field="SnapshotID", tenant_id=tenant_id)
     return f"SH{int(next_num):05d}"
 
 
@@ -2495,7 +2500,7 @@ def generar_snapshot_saldos(origen="Manual", fecha=None, tenant_id=None):
     if fecha_dt is None:
         fecha_dt = get_now()
 
-    snapshot_id = _siguiente_id_snapshot()
+    snapshot_id = _siguiente_id_snapshot(tenant_id=tenant_id)
     tenant_id = _require_tenant_id(tenant_id)
     cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
     

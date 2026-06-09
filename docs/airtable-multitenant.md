@@ -1,6 +1,6 @@
 # Arquitectura Airtable Multi-Tenant
 
-Esta guia aplica a `develop`. `main` todavia conserva la estructura operativa sin separacion por tenant, por lo que antes de pasar `develop` a `main` hay que preparar Airtable.
+Esta guia aplica a `main` y `develop`. La estructura operativa actual es multi-tenant sobre una sola base compartida de Airtable.
 
 ## Objetivo
 
@@ -17,11 +17,11 @@ Reglas principales:
 - El admin puede mantener Gmail/voz para su usuario principal si las variables globales estan habilitadas.
 - Jobs automaticos y webhooks sin usuario Telegram usan `SYSTEM_TENANT_ID`.
 
-## Diferencia Contra `main`
+## Estado Actual
 
-`main` opera como bot personal monousuario. Las tablas financieras no dependen de `TenantID`.
+`main` opera con separacion obligatoria por `TenantID`. No debe quedar codigo financiero leyendo o escribiendo datos sin tenant.
 
-`develop` agrega:
+La arquitectura agrega:
 
 - Tabla `Tenants`.
 - Tabla `Usuarios`.
@@ -37,7 +37,7 @@ Reglas principales:
 
 ## Preparacion Manual En Airtable
 
-Antes de desplegar `develop`, agrega estas tablas y columnas en la base actual. No elimines ni renombres tus columnas existentes.
+Antes de desplegar cambios sobre una base nueva, agrega estas tablas y columnas. No elimines ni renombres tus columnas existentes.
 
 ### `Tenants`
 
@@ -283,6 +283,17 @@ SYSTEM_TENANT_ID=TEN_TG_<telegram_id_admin>
 ```
 
 No se debe usar un fallback silencioso al admin dentro de `airtable_handler.py`. La capa financiera debe fallar con error claro si falta `tenant_id`.
+
+### Correlativos
+
+Los correlativos deben calcularse por campo logico y por tenant, nunca por posicion de columna. Esto evita saltos cuando Airtable cambia el orden fisico de columnas.
+
+- `Transacciones`: campo `ID`, prefijo `TX`
+- `MovimientosPendientes`: campo `ID`, prefijo `MP`
+- `Deudas`: campo `ID`, sin prefijo
+- `SaldosHistoricos`: campo `SnapshotID`, prefijo `SH`
+
+Si `TenantID` existe en la tabla, el generador debe exigir `tenant_id` y buscar el maximo solo dentro de ese tenant.
 
 ## Limpieza De Datos Legacy
 
