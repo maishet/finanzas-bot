@@ -86,10 +86,32 @@ def _next_numeric_id(rows, field):
     max_num = 0
     for row in rows:
         try:
-            max_num = max(max_num, int(str(row.get(field, "")).strip()))
+            raw = str(row.get(field, "")).strip()
+            if not raw:
+                continue
+            max_num = max(max_num, int(float(raw)))
         except ValueError:
             continue
     return str(max_num + 1)
+
+
+def _create_record_allowing_generated_id(table_name, tenant_id, fields, id_field="ID"):
+    try:
+        created = _store().create_record(table_name, tenant_id, fields)
+    except RuntimeError as e:
+        message = str(e)
+        if id_field not in fields or f'Field "{id_field}" cannot accept' not in message:
+            raise
+        retry_fields = dict(fields)
+        retry_fields.pop(id_field, None)
+        created = _store().create_record(table_name, tenant_id, retry_fields)
+        merged = dict(retry_fields)
+        merged.update(dict(created.get("fields", {})))
+        return merged
+
+    merged = dict(fields)
+    merged.update(dict(created.get("fields", {})))
+    return merged
 
 
 def seed_categories(tenant_id):
@@ -137,15 +159,14 @@ def add_account(tenant_id, nombre, tipo, moneda, saldo, numero_cuenta=""):
         raise ValueError(f"Ya existe la cuenta '{nombre}'.")
 
     fields = {
-        "ID": _next_prefixed_id(accounts, "ID", "CTA"),
+        "ID": int(_next_numeric_id(accounts, "ID")),
         "Nombre": nombre,
         "NumeroCuenta": str(numero_cuenta or "").strip(),
         "Tipo": ACCOUNT_TYPES[tipo_norm],
         "Moneda": moneda,
         "SaldoActual": round(parsear_numero(saldo), 2),
     }
-    _store().create_record("Cuentas", tenant_id, fields)
-    return fields
+    return _create_record_allowing_generated_id("Cuentas", tenant_id, fields)
 
 
 def add_debt(tenant_id, descripcion, tipo, monto, moneda, fecha_vencimiento, cuenta_asociada):
@@ -164,7 +185,7 @@ def add_debt(tenant_id, descripcion, tipo, monto, moneda, fecha_vencimiento, cue
 
     debts = _records(tenant_id, "Deudas")
     fields = {
-        "ID": _next_numeric_id(debts, "ID"),
+        "ID": int(_next_numeric_id(debts, "ID")),
         "Descripcion": descripcion,
         "Tipo": DEBT_TYPES[tipo_norm],
         "MontoTotal": round(parsear_numero(monto), 2),
@@ -174,5 +195,4 @@ def add_debt(tenant_id, descripcion, tipo, monto, moneda, fecha_vencimiento, cue
         "Estado": "Activa",
         "CuentaAsociada": cuenta_asociada,
     }
-    _store().create_record("Deudas", tenant_id, fields)
-    return fields
+    return _create_record_allowing_generated_id("Deudas", tenant_id, fields)

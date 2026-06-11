@@ -547,7 +547,7 @@ async def configurar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.effective_message.reply_text(
                 f"✅ Cuenta creada\n"
-                f"ID: {account['ID']}\n"
+                f"ID: {account.get('ID', '—')}\n"
                 f"Nombre: {account['Nombre']}\n"
                 f"Tipo: {account['Tipo']}\n"
                 f"Saldo: {account['Moneda']} {account['SaldoActual']:,.2f}"
@@ -571,7 +571,7 @@ async def configurar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.effective_message.reply_text(
                 f"✅ Deuda creada\n"
-                f"ID: {debt['ID']}\n"
+                f"ID: {debt.get('ID', '—')}\n"
                 f"Descripción: {debt['Descripcion']}\n"
                 f"Pendiente: {debt['Moneda']} {debt['MontoTotal']:,.2f}\n"
                 f"Vence: {debt['FechaVencimiento']}\n"

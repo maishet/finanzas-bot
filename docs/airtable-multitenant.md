@@ -99,7 +99,7 @@ Ese valor debe coincidir con `USER_ID` o `ADMIN_TELEGRAM_USER_ID` en el `.env`.
 | Campo | Tipo |
 | --- | --- |
 | `TenantID` | Single line text |
-| `ID` | Single line text |
+| `ID` | Number, precision 0 |
 | `Nombre` | Single line text |
 | `NumeroCuenta` | Single line text |
 | `Tipo` | Single select: `Efectivo`, `Banco`, `Credito`, `Crédito`, `Debito` |
@@ -142,7 +142,7 @@ Ese valor debe coincidir con `USER_ID` o `ADMIN_TELEGRAM_USER_ID` en el `.env`.
 | Campo | Tipo |
 | --- | --- |
 | `TenantID` | Single line text |
-| `ID` | Single line text |
+| `ID` | Number, precision 0 |
 | `Descripcion` | Single line text |
 | `Tipo` | Single select: `Credito`, `Crédito`, `Servicio` |
 | `MontoTotal` | Number, precision 2 |
@@ -302,7 +302,8 @@ Los correlativos deben calcularse por campo logico y por tenant, nunca por posic
 
 - `Transacciones`: campo `ID`, prefijo `TX`
 - `MovimientosPendientes`: campo `ID`, prefijo `MP`
-- `Deudas`: campo `ID`, sin prefijo
+- `Cuentas`: campo `ID`, numerico sin prefijo
+- `Deudas`: campo `ID`, numerico sin prefijo
 - `SaldosHistoricos`: campo `SnapshotID`, prefijo `SH`
 
 Si `TenantID` existe en la tabla, el generador debe exigir `tenant_id` y buscar el maximo solo dentro de ese tenant.

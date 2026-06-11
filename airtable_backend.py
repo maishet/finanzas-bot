@@ -118,7 +118,7 @@ DEFAULT_FIELD_DEFS = {
     ],
     "Cuentas": [
         _text("TenantID"),
-        _text("ID"),
+        _integer("ID"),
         _text("Nombre"),
         _text("NumeroCuenta"),
         _single_select("Tipo", ["Efectivo", "Banco", "Crédito", "Debito"]),
