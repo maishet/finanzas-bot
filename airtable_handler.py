@@ -128,6 +128,13 @@ def _update_row_fields(worksheet, row, fields):
     return airtable_api.update_record(worksheet.title, record["id"], dict(fields or {}))
 
 
+def _update_record_fields(worksheet, record, fields):
+    record_id = str((record or {}).get("_record_id", "")).strip()
+    if record_id:
+        return airtable_api.update_record(worksheet.title, record_id, dict(fields or {}))
+    return _update_row_fields(worksheet, record["_row"], fields)
+
+
 def _cache_get(key):
     entry = _SHEET_CACHE.get(key)
     if not entry:
@@ -150,6 +157,10 @@ def _cache_invalidate(*keys):
         return
     for key in keys:
         _SHEET_CACHE.pop(key, None)
+        prefijo = f"{key}:"
+        for cache_key in list(_SHEET_CACHE.keys()):
+            if str(cache_key).startswith(prefijo):
+                _SHEET_CACHE.pop(cache_key, None)
 
 
 def refrescar_cache_general():
@@ -170,7 +181,13 @@ def _leer_records_cacheados(worksheet, cache_key, tenant_id=None):
     if valor is not None:
         return valor
 
-    records = worksheet.get_all_records()
+    records = []
+    for idx, record in enumerate(worksheet._all_records(), start=2):
+        fields = record.get("fields", {})
+        row = {h: fields.get(h, "") for h in headers}
+        row["_record_id"] = record.get("id")
+        row["_row"] = idx
+        records.append(row)
     if tenant_id:
         records = [r for r in records if str(r.get("TenantID", "")).strip() == tenant_id]
     return _cache_set(effective_cache_key, records)
@@ -577,7 +594,7 @@ def registrar_movimiento_pendiente(
         fields["Observacion"] = str(observacion).strip()
 
     airtable_api.create_record("MovimientosPendientes", _fields_with_tenant(pend_ws, fields, tenant_id))
-    _cache_invalidate("pendientes_values")
+    _cache_invalidate("pendientes_values", "pendientes_records")
     return pend_id
 
 
@@ -652,18 +669,9 @@ def _buscar_pendiente_por_id(pendiente_id, tenant_id=None):
     if not pid:
         return None
 
-    valores = _leer_values_cacheados(pend_ws, "pendientes_values", tenant_id=tenant_id)
-    if not valores or len(valores) <= 1:
-        return None
-
-    headers = valores[0]
-    tenant_id = _require_tenant_id(tenant_id) if "TenantID" in headers else None
-    for i, fila in enumerate(valores[1:], start=2):
-        reg = dict(zip(headers, fila))
-        if tenant_id and str(reg.get("TenantID", "")).strip() != tenant_id:
-            continue
+    registros = _leer_records_cacheados(pend_ws, "pendientes_records", tenant_id=tenant_id)
+    for reg in registros:
         if str(reg.get("ID", "")).strip().upper() == pid:
-            reg["_row"] = i
             return reg
     return None
 
@@ -976,7 +984,7 @@ def confirmar_movimiento_pendiente(pendiente_id, categoria_input, nota_extra="",
         else:
             raise
 
-    _cache_invalidate("pendientes_values")
+    _cache_invalidate("pendientes_values", "pendientes_records")
 
     return {
         "pendiente_id": str(p.get("ID", pendiente_id)).strip(),
@@ -1007,7 +1015,7 @@ def descartar_movimiento_pendiente(pendiente_id, motivo="", tenant_id=None):
     if str(motivo).strip():
         update_fields["Observacion"] = str(motivo).strip()
     airtable_api.update_record("MovimientosPendientes", record["id"], update_fields)
-    _cache_invalidate("pendientes_values")
+    _cache_invalidate("pendientes_values", "pendientes_records")
     return {"pendiente_id": str(p.get("ID", pendiente_id)).strip(), "motivo": motivo}
 
 
@@ -1182,12 +1190,11 @@ def detectar_cuenta_por_ultimos_digitos(ultimos4, tenant_id=None):
     suf = suf[-4:]
 
     cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
-    for i, c in enumerate(cuentas, start=2):
+    for c in cuentas:
         ids = _identificadores_cuenta(c)
         for ident in ids:
             dig = _normalizar_digitos(ident)
             if len(dig) >= 4 and dig.endswith(suf):
-                c["_row"] = i
                 return c
     return None
 
@@ -1274,9 +1281,8 @@ def obtener_cuenta_por_nombre(nombre_input, tenant_id=None):
     """
     input_norm = normalizar_texto(nombre_input)
     cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
-    for i, c in enumerate(cuentas, start=2):
+    for c in cuentas:
         if normalizar_texto(c["Nombre"]) == input_norm:
-            c["_row"] = i
             return c
     return None
 
@@ -1307,19 +1313,18 @@ def detectar_cuenta_en_texto(texto, tenant_id=None):
     cuentas = _leer_records_cacheados(cuentas_ws, "cuentas_records", tenant_id=tenant_id)
 
     candidatos = []
-    for i, c in enumerate(cuentas, start=2):
+    for c in cuentas:
         nombre = str(c.get("Nombre", "")).strip()
         if not nombre:
             continue
         nombre_norm = normalizar_texto(nombre)
-        candidatos.append((len(nombre_norm), nombre_norm, i, c))
+        candidatos.append((len(nombre_norm), nombre_norm, c))
 
     # Primero busca nombres más largos para evitar matches parciales incorrectos.
     candidatos.sort(reverse=True, key=lambda x: x[0])
-    for _, nombre_norm, fila, cuenta in candidatos:
+    for _, nombre_norm, cuenta in candidatos:
         patron = rf"(^|\s){re.escape(nombre_norm)}(\s|$)"
         if re.search(patron, texto_norm):
-            cuenta["_row"] = fila
             return cuenta
 
     # Fallback por últimos 4 dígitos presentes en el texto.
@@ -1332,29 +1337,21 @@ def detectar_cuenta_en_texto(texto, tenant_id=None):
 
 # ---------- DEUDAS ----------
 def obtener_deudas_con_fila(tenant_id=None):
-    """Lee deudas de Airtable con FORMATTED_VALUE para evitar truncamiento de números."""
+    """Lee deudas de Airtable conservando la fila global real para updates seguros."""
     tenant_id = _require_tenant_id(tenant_id)
     try:
-        # Usar función que lee con FORMATTED_VALUE y retorna dicts
-        deudas = _leer_registros_formateado("Deudas")
-        
-        resultado = []
-        for idx, d in enumerate(deudas, start=2):
-            if str(d.get("TenantID", "")).strip() != tenant_id:
-                continue
-            # Agregar _row para poder actualizar después
-            d["_row"] = idx
-            resultado.append(d)
-        
-        return resultado
+        return _leer_records_cacheados(deudas_ws, "deudas_records", tenant_id=tenant_id)
     except Exception as e:
         logger.error(f"Error en obtener_deudas_con_fila: {e}")
-        # Fallback al cache si falla la lectura directa
-        deudas = deudas_ws.get_all_records()
+        records = deudas_ws._all_records()
         resultado = []
-        for i, d in enumerate(deudas, start=2):
+        headers = _headers(deudas_ws)
+        for i, record in enumerate(records, start=2):
+            fields = record.get("fields", {})
+            d = {h: fields.get(h, "") for h in headers}
             if str(d.get("TenantID", "")).strip() != tenant_id:
                 continue
+            d["_record_id"] = record.get("id")
             d["_row"] = i
             resultado.append(d)
         return resultado
@@ -1758,12 +1755,9 @@ def obtener_transaccion_por_id(trans_id, tenant_id=None):
         return None
 
     tenant_id = _require_tenant_id(tenant_id)
-    transacciones = trans_ws.get_all_records()
-    for i, t in enumerate(transacciones, start=2):
-        if str(t.get("TenantID", "")).strip() != tenant_id:
-            continue
+    transacciones = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
+    for t in transacciones:
         if str(t.get("ID", "")).strip().upper() == trans_id_norm:
-            t["_row"] = i
             return t
     return None
 
@@ -1963,7 +1957,7 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen, tenant_i
         saldo_cache,
     )
 
-    _update_row_fields(cuentas_ws, cuenta["_row"], {"SaldoActual": nuevo_saldo})
+    _update_record_fields(cuentas_ws, cuenta, {"SaldoActual": nuevo_saldo})
     _cache_invalidate("cuentas_records")
     logger.debug(f"Saldo de '{nombre_cuenta}' escrito en hoja: {saldo_actual} -> {nuevo_saldo}")
     return True
