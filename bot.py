@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 VOICE_PENDING_KEY = "voice_pending_payload"
 VOICE_EDITING_KEY = "voice_editing_mode"
 PENDING_CONFIRM_KEY = "pending_confirm_pending"
+ACCESS_REQUESTS_KEY = "access_requests"
 VENTANAS_RECORDATORIO_DIAS = (7, 3, 1)
 
 
@@ -279,6 +280,25 @@ def _fmt_bool(value):
     return "sí" if bool(value) else "no"
 
 
+def _nombre_telegram(user):
+    if not user:
+        return "Usuario"
+    nombre = " ".join(
+        part for part in [getattr(user, "first_name", "") or "", getattr(user, "last_name", "") or ""] if part
+    ).strip()
+    return nombre or getattr(user, "username", "") or f"Usuario {getattr(user, 'id', '')}"
+
+
+def _descripcion_usuario_telegram(user):
+    if not user:
+        return "Usuario desconocido"
+    nombre = _nombre_telegram(user)
+    username = getattr(user, "username", "") or ""
+    if username:
+        return f"{nombre} (@{username})"
+    return nombre
+
+
 @restricted
 async def mi_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -357,6 +377,111 @@ async def admin_block_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text("❌ Error bloqueando usuario.")
         return
     await update.effective_message.reply_text("✅ Usuario bloqueado.")
+
+
+async def _solicitar_acceso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    telegram_id = str(user.id)
+    nombre = _nombre_telegram(user)
+    descripcion = _descripcion_usuario_telegram(user)
+
+    pending = context.bot_data.setdefault(ACCESS_REQUESTS_KEY, {})
+    pending[telegram_id] = nombre
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Aprobar", callback_data=f"access:approve:{telegram_id}"),
+                InlineKeyboardButton("Denegar", callback_data=f"access:deny:{telegram_id}"),
+            ]
+        ]
+    )
+    mensaje_admin = (
+        "Solicitud de acceso al bot\n"
+        f"Usuario: {descripcion}\n"
+        f"Telegram ID: {telegram_id}\n\n"
+        "Al aprobar se creará su tenant con Gmail y voz desactivados."
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_TELEGRAM_USER_ID,
+            text=mensaje_admin,
+            reply_markup=keyboard,
+        )
+        await update.effective_message.reply_text(
+            "Tu solicitud de acceso fue enviada al administrador. "
+            "Te avisaré por este chat cuando sea revisada."
+        )
+    except Exception as e:
+        logger.error(f"No se pudo enviar solicitud de acceso al admin: {e}")
+        await update.effective_message.reply_text(
+            "No pude enviar la solicitud al administrador. Intenta nuevamente más tarde."
+        )
+
+
+async def callbacks_acceso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.edit_message_text("Solo el administrador puede responder solicitudes de acceso.")
+        return
+
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.edit_message_text("Solicitud inválida.")
+        return
+
+    _, action, telegram_id = parts
+    pending = context.bot_data.setdefault(ACCESS_REQUESTS_KEY, {})
+    nombre = pending.pop(telegram_id, None) or f"Usuario {telegram_id}"
+
+    try:
+        if action == "approve":
+            if is_authorized_user(telegram_id):
+                await query.edit_message_text(f"El usuario {telegram_id} ya está autorizado.")
+                return
+            tenant = create_or_update_user(telegram_id, nombre, rol="Owner")
+            await query.edit_message_text(
+                "Usuario aprobado\n"
+                f"Nombre: {tenant.nombre}\n"
+                f"Telegram ID: {tenant.telegram_user_id}\n"
+                f"TenantID: {tenant.tenant_id}\n"
+                "Setup: No\n"
+                "Gmail: No\n"
+                "Voz: No"
+            )
+            await context.bot.send_message(
+                chat_id=int(telegram_id),
+                text=(
+                    "Tu acceso fue aprobado.\n\n"
+                    "Empieza con /configurar para crear tus categorías, cuentas y deudas iniciales."
+                ),
+            )
+            return
+
+        if action == "deny":
+            if is_authorized_user(telegram_id):
+                await query.edit_message_text(f"No se denegó: el usuario {telegram_id} ya está autorizado.")
+                return
+            create_or_update_user(telegram_id, nombre, rol="Owner")
+            tenant_block_user(telegram_id)
+            await query.edit_message_text(
+                "Solicitud denegada\n"
+                f"Usuario: {nombre}\n"
+                f"Telegram ID: {telegram_id}"
+            )
+            await context.bot.send_message(
+                chat_id=int(telegram_id),
+                text="Tu solicitud de acceso fue denegada por el administrador.",
+            )
+            return
+
+        await query.edit_message_text("Acción inválida.")
+    except Exception as e:
+        logger.error(f"Error respondiendo solicitud de acceso: {e}")
+        await query.edit_message_text(f"Error procesando solicitud: {e}")
 
 
 @restricted
@@ -482,8 +607,16 @@ def metodo_por_tipo_cuenta(tipo_cuenta):
         return "Transferencia"
     return "Efectivo"
 
-@restricted
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        resolve_tenant_context(update.effective_user.id)
+    except TenantContextError as e:
+        if "No tienes acceso" in str(e):
+            await _solicitar_acceso(update, context)
+            return
+        await update.effective_message.reply_text(f"⛔ {e}")
+        return
+
     await update.effective_message.reply_text(
         "👋 ¡Hola! Soy tu asistente financiero personal.\n"
         "Usa /ayuda para ver los comandos disponibles."
@@ -2219,6 +2352,7 @@ def main():
     app.add_handler(CommandHandler("admin_block_user", admin_block_user_cmd))
     app.add_handler(CommandHandler("editar", editar_tx))
     app.add_handler(CommandHandler("eliminar", eliminar_tx))
+    app.add_handler(CallbackQueryHandler(callbacks_acceso, pattern=r"^access:"))
     app.add_handler(CallbackQueryHandler(callbacks_pendientes, pattern=r"^pend:"))
     app.add_handler(CallbackQueryHandler(callbacks_voz, pattern=r"^voice:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, procesar_nota_voz))

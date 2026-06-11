@@ -361,6 +361,7 @@ Los comandos resuelven el tenant desde Telegram. Los procesos sin usuario direct
 
 Comandos admin iniciales:
 
+- `/start`: si el usuario no esta autorizado, envia una solicitud de acceso al administrador con botones para aprobar o denegar.
 - `/admin_add_user <telegram_id> <nombre>`: crea tenant y usuario activo con Gmail/Voz desactivados.
 - `/admin_users`: lista usuarios registrados.
 - `/admin_block_user <telegram_id>`: bloquea acceso.

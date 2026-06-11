@@ -205,38 +205,50 @@ Ese valor debe coincidir con `USER_ID` o `ADMIN_TELEGRAM_USER_ID` en el `.env`.
 
 ## Flujo Para Un Usuario Nuevo
 
-1. El admin autoriza al usuario:
+1. El usuario abre el bot y envia:
+
+```text
+/start
+```
+
+Si no esta autorizado, el bot envia una solicitud al administrador con botones para aprobar o denegar. El usuario no necesita conocer su Telegram ID.
+
+2. El admin aprueba desde el mensaje recibido en Telegram.
+
+Al aprobar, el bot crea `Tenants` y `Usuarios` con `SetupCompleto=No`, `GmailEnabled=No` y `VoiceEnabled=No`.
+
+Tambien se puede autorizar manualmente:
 
 ```text
 /admin_add_user <telegram_id> <nombre>
 ```
 
-2. El usuario revisa su contexto:
+3. El usuario revisa su contexto:
 
 ```text
 /mi_config
 ```
 
-3. El usuario precarga categorias:
+4. El usuario precarga categorias:
 
 ```text
 /configurar categorias
 ```
 
-4. El usuario crea cuentas:
+5. El usuario crea cuentas:
 
 ```text
 /configurar cuenta BCP Banco PEN 1500 2091
 /configurar cuenta AMEX Crédito PEN 0 5630
 ```
 
-5. El usuario crea deudas si aplica:
+6. El usuario crea deudas si aplica:
 
 ```text
 /configurar deuda Tarjeta_AMEX Crédito 0 PEN 2026-06-25 AMEX
 ```
 
-6. El usuario cierra setup:
+7. El usuario cierra setup:
 
 ```text
 /configurar finalizar
