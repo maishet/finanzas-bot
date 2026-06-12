@@ -1221,6 +1221,29 @@ def obtener_estado_gmail_push(clave=None, default=None, tenant_id=None):
     return estado.get(clave, default)
 
 
+def resolver_tenant_gmail_por_email(email):
+    """Resuelve TenantID a partir del watch_email registrado en GmailEstado."""
+    email_norm = str(email or "").strip().lower()
+    if not email_norm:
+        return None
+
+    estados = {}
+    for record in airtable_api.list_records("GmailEstado"):
+        fields = record.get("fields", {}) or {}
+        tenant_id = str(fields.get("TenantID", "")).strip()
+        clave = str(fields.get("Clave", "")).strip()
+        valor = str(fields.get("Valor", "")).strip()
+        if not tenant_id or not clave:
+            continue
+        estados.setdefault(tenant_id, {})[clave] = valor
+
+    for tenant_id, estado in estados.items():
+        if str(estado.get("watch_email", "")).strip().lower() == email_norm:
+            return tenant_id
+
+    return None
+
+
 def guardar_estado_gmail_push(tenant_id=None, **campos):
     """Crea o actualiza claves de estado para Gmail Push."""
     if not campos:

@@ -325,9 +325,26 @@ Tambien revisa `GmailEstado`. Las claves validas son:
 
 Si aparecen claves que en realidad son valores, por ejemplo un email, un topic, un timestamp o un numero de expiracion, son residuos del esquema anterior y deben eliminarse.
 
+## Gmail Push Multi-Tenant
+
+El webhook de Gmail entrega `emailAddress` y `historyId`, pero no entrega usuario Telegram. Para resolver el tenant, el bot busca en `GmailEstado` una fila con:
+
+```text
+Clave = watch_email
+Valor = <emailAddress del webhook>
+```
+
+El `TenantID` de esa fila define el tenant para leer cuentas, deduplicar movimientos, registrar pendientes y actualizar `last_history_id`.
+
+Reglas:
+
+- Cada mailbox vigilado debe tener `watch_email` guardado en `GmailEstado` con su `TenantID`.
+- La deteccion de cuenta por ultimos digitos siempre debe ejecutarse con ese `tenant_id`.
+- Mientras Gmail use un token OAuth global, debe mantenerse habilitado solo para el admin o para tenants que tengan token/estado propio.
+
 ## Riesgos Pendientes
 
 - `airtable_handler.py` se mantiene como servicio financiero principal, pero sus lecturas y escrituras financieras deben recibir `tenant_id` y filtrar por `TenantID`.
-- Gmail Push procesa un buzon global; por ahora debe mantenerse solo para admin o usuarios con `GmailEnabled=Si`.
+- Gmail Push resuelve tenant por `GmailEstado.watch_email`; por ahora debe mantenerse solo para admin o usuarios con `GmailEnabled=Si` y estado Gmail propio.
 - Voz usa configuracion global del proveedor; por ahora debe mantenerse solo para usuarios con `VoiceEnabled=Si`.
 - Los IDs como `TX00001` pueden repetirse entre tenants. Mientras todos los accesos filtren por `TenantID`, esto es aceptable.

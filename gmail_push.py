@@ -24,6 +24,7 @@ from airtable_handler import (
     existe_movimiento_pendiente_duplicado,
     obtener_estado_gmail_push,
     guardar_estado_gmail_push,
+    resolver_tenant_gmail_por_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,13 +82,14 @@ def _remitente_permitido(sender_email):
     return False
 
 
-def _credenciales_gmail():
+def _credenciales_gmail(tenant_id=None):
     global _GMAIL_AUTH_ERROR_LOGGED_AT
+    tenant_id = str(tenant_id or config.SYSTEM_TENANT_ID or "").strip()
 
     # Intentar cargar el token desde Airtable primero (permite actualizar sin reinicio)
     refresh_token = None
     try:
-        estado = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN", tenant_id=config.SYSTEM_TENANT_ID)
+        estado = obtener_estado_gmail_push("GMAIL_REFRESH_TOKEN", tenant_id=tenant_id)
         if estado:
             refresh_token = estado.strip()
     except Exception:
@@ -131,8 +133,8 @@ def _credenciales_gmail():
     return creds
 
 
-def _gmail_api_request(method, endpoint, params=None, body=None, timeout=30):
-    creds = _credenciales_gmail()
+def _gmail_api_request(method, endpoint, params=None, body=None, timeout=30, tenant_id=None):
+    creds = _credenciales_gmail(tenant_id=tenant_id)
     query = ""
     if params:
         query = "?" + urllib.parse.urlencode(params, doseq=True)
@@ -333,7 +335,7 @@ def _extraer_monto(texto):
     return round(candidatos[0][1], 2)
 
 
-def _detectar_cuenta(texto, nombres_cuentas, modo_estricto=False):
+def _detectar_cuenta(texto, nombres_cuentas, modo_estricto=False, tenant_id=None):
     """Detecta cuenta en el texto.
     
     Args:
@@ -350,7 +352,7 @@ def _detectar_cuenta(texto, nombres_cuentas, modo_estricto=False):
     # PRIORIDAD 1: Buscar últimos 4 dígitos (MÁS CONFIABLE)
     ultimos4 = re.findall(r"(?<!\d)(\d{4})(?!\d)", texto or "")
     for suf in ultimos4:
-        cuenta_obj = detectar_cuenta_por_ultimos_digitos(suf)
+        cuenta_obj = detectar_cuenta_por_ultimos_digitos(suf, tenant_id=tenant_id)
         if cuenta_obj and cuenta_obj.get("Nombre"):
             return cuenta_obj["Nombre"]
     
@@ -395,7 +397,7 @@ def _base64url_decode(data):
     return base64.urlsafe_b64decode(data + padding)
 
 
-def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
+def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id="", tenant_id=None):
     msg = email.message_from_bytes(raw_bytes, policy=policy.default)
     subject = _decode_subject(msg)
     body = _extract_text(msg)
@@ -453,7 +455,12 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         )
         return None
 
-    cuenta = _detectar_cuenta(texto, obtener_nombres_cuentas(tenant_id=config.SYSTEM_TENANT_ID), modo_estricto=True)
+    cuenta = _detectar_cuenta(
+        texto,
+        obtener_nombres_cuentas(tenant_id=tenant_id),
+        modo_estricto=True,
+        tenant_id=tenant_id,
+    )
     if not cuenta:
         _log_descarte_gmail_push(
             "cuenta_no_detectada",
@@ -493,7 +500,7 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         if origen_match:
             origen_nombre = origen_match.group(1).strip()
             origen_ult4 = origen_match.group(2).strip()
-            origen_cuenta = detectar_cuenta_por_ultimos_digitos(origen_ult4)
+            origen_cuenta = detectar_cuenta_por_ultimos_digitos(origen_ult4, tenant_id=tenant_id)
             if origen_cuenta and origen_cuenta.get("Nombre"):
                 cuenta = origen_cuenta["Nombre"]
                 origen_nombre = origen_cuenta["Nombre"]
@@ -503,7 +510,7 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
         if destino_match:
             destino_nombre = destino_match.group(1).strip()
             destino_ult4 = destino_match.group(2).strip()
-            destino_cuenta = detectar_cuenta_por_ultimos_digitos(destino_ult4)
+            destino_cuenta = detectar_cuenta_por_ultimos_digitos(destino_ult4, tenant_id=tenant_id)
             if destino_cuenta and destino_cuenta.get("Nombre"):
                 destino_nombre = destino_cuenta["Nombre"]
 
@@ -543,7 +550,7 @@ def _parsear_mensaje_rfc822(raw_bytes, fallback_message_id=""):
 
 
 
-def _obtener_mensajes_desde_historial(start_history_id):
+def _obtener_mensajes_desde_historial(start_history_id, tenant_id=None):
     mensajes = []
     page_token = None
     current_history_id = None
@@ -559,7 +566,7 @@ def _obtener_mensajes_desde_historial(start_history_id):
         elif "pageToken" in params:
             params.pop("pageToken", None)
 
-        data = _gmail_api_request("GET", "users/me/history", params=params)
+        data = _gmail_api_request("GET", "users/me/history", params=params, tenant_id=tenant_id)
         current_history_id = str(data.get("historyId", current_history_id or start_history_id))
         for history_item in data.get("history", []) or []:
             for added in history_item.get("messagesAdded", []) or []:
@@ -604,7 +611,7 @@ def iniciar_watch_gmail(force=False, tenant_id=None):
         body["labelIds"] = config.GMAIL_WATCH_LABEL_IDS
         body["labelFilterAction"] = "include"
 
-    response = _gmail_api_request("POST", "users/me/watch", body=body)
+    response = _gmail_api_request("POST", "users/me/watch", body=body, tenant_id=tenant_id)
     history_id = str(response.get("historyId", "")).strip()
     expiration = str(response.get("expiration", "")).strip()
 
@@ -629,7 +636,6 @@ async def procesar_notificacion_gmail_push(envelope):
 
 
 def _procesar_notificacion_gmail_push_sync(envelope):
-    tenant_id = config.SYSTEM_TENANT_ID
     if not config.GMAIL_PUSH_ENABLED:
         logger.warning("Gmail Push ignorado porque está deshabilitado en configuración.")
         return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "push deshabilitado"}
@@ -645,15 +651,27 @@ def _procesar_notificacion_gmail_push_sync(envelope):
     notification_history_id = str(payload.get("historyId", "")).strip()
     notification_email = str(payload.get("emailAddress", "")).strip()
 
-    if config.GMAIL_USER_EMAIL and notification_email and _normalizar_correo(notification_email) != _normalizar_correo(config.GMAIL_USER_EMAIL):
+    tenant_id = resolver_tenant_gmail_por_email(notification_email)
+    if not tenant_id and config.GMAIL_USER_EMAIL and notification_email and _normalizar_correo(notification_email) == _normalizar_correo(config.GMAIL_USER_EMAIL):
+        tenant_id = config.SYSTEM_TENANT_ID
+
+    if not tenant_id:
+        logger.warning(
+            "Notificación Gmail descartada porque no se pudo resolver tenant | notification_email=%s",
+            notification_email or "—",
+        )
+        return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 1, "detalle": "tenant no resuelto"}
+
+    estado = obtener_estado_gmail_push(tenant_id=tenant_id)
+    watch_email = str(estado.get("watch_email", "")).strip()
+    if watch_email and notification_email and _normalizar_correo(notification_email) != _normalizar_correo(watch_email):
         logger.info(
             "Notificación Gmail descartada por email distinto | notification_email=%s expected=%s",
             notification_email,
-            config.GMAIL_USER_EMAIL,
+            watch_email,
         )
         return {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "detalle": "email distinto"}
 
-    estado = obtener_estado_gmail_push(tenant_id=tenant_id)
     last_history_id = str(estado.get("last_history_id", "")).strip()
     if not last_history_id:
         logger.warning(
@@ -674,7 +692,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
     except ValueError:
         pass
 
-    mensajes, current_history_id = _obtener_mensajes_desde_historial(last_history_id)
+    mensajes, current_history_id = _obtener_mensajes_desde_historial(last_history_id, tenant_id=tenant_id)
     stats = {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0}
     nuevos_ids = []
 
@@ -684,6 +702,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
                 "GET",
                 f"users/me/messages/{message_id}",
                 params={"format": "raw"},
+                tenant_id=tenant_id,
             )
             raw = message_data.get("raw", "")
             if not raw:
@@ -691,7 +710,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
                 stats["omitidos"] += 1
                 continue
 
-            parsed = _parsear_mensaje_rfc822(_base64url_decode(raw), fallback_message_id=message_id)
+            parsed = _parsear_mensaje_rfc822(_base64url_decode(raw), fallback_message_id=message_id, tenant_id=tenant_id)
             if not parsed:
                 logger.info("Mensaje Gmail %s descartado tras parseo y filtros.", message_id)
                 stats["omitidos"] += 1
