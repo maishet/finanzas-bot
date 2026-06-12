@@ -8,7 +8,7 @@ from functools import wraps
 import httpx
 import tornado.web
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram import BotCommand
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 from telegram.ext import _updater as ptb_updater
 from telegram.ext._utils.webhookhandler import TelegramHandler
@@ -47,6 +47,7 @@ from tenant_context import (
     list_users as tenant_list_users,
     mark_setup_complete,
     resolve_tenant_context,
+    telegram_user_id_for_tenant,
 )
 from tenant_setup_service import add_account as tenant_add_account
 from tenant_setup_service import add_debt as tenant_add_debt
@@ -195,8 +196,11 @@ class GmailPushHandler(tornado.web.RequestHandler):
         if self.bot and stats.get("registrados", 0) > 0:
             try:
                 nuevos = stats.get("nuevos_ids", [])
+                tenant_id = str(stats.get("tenant_id", "")).strip()
+                chat_id = telegram_user_id_for_tenant(tenant_id) or config.ADMIN_TELEGRAM_USER_ID
                 mensaje = (
                     "📬 Gmail Push detectó nuevos movimientos\n"
+                    f"TenantID: {tenant_id or '—'}\n"
                     f"Registrados: {stats.get('registrados', 0)}\n"
                     f"Duplicados: {stats.get('duplicados', 0)}\n"
                     f"Omitidos: {stats.get('omitidos', 0)}\n"
@@ -204,7 +208,7 @@ class GmailPushHandler(tornado.web.RequestHandler):
                 )
                 if nuevos:
                     mensaje += "\nIDs: " + ", ".join(nuevos[:5])
-                await self.bot.send_message(chat_id=config.USER_ID, text=mensaje)
+                await self.bot.send_message(chat_id=int(chat_id), text=mensaje)
             except Exception as e:
                 logger.warning(f"No se pudo notificar por Telegram el Gmail Push: {e}")
 
@@ -609,12 +613,25 @@ def metodo_por_tipo_cuenta(tipo_cuenta):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        resolve_tenant_context(update.effective_user.id)
+        tenant = resolve_tenant_context(update.effective_user.id)
     except TenantContextError as e:
         if "No tienes acceso" in str(e):
             await _solicitar_acceso(update, context)
             return
         await update.effective_message.reply_text(f"⛔ {e}")
+        return
+
+    if not tenant.setup_completo:
+        await update.effective_message.reply_text(
+            "👋 Bienvenido. Tu acceso ya está activo.\n\n"
+            "Configuración inicial:\n"
+            "1. /configurar categorias\n"
+            "2. /configurar cuenta BCP Banco PEN 1500 2091\n"
+            "3. /configurar cuenta Efectivo Efectivo PEN 0\n"
+            "4. /configurar deuda Tarjeta_AMEX Crédito 0 PEN 2026-06-25 AMEX\n"
+            "5. /configurar finalizar\n\n"
+            "Puedes omitir deudas si no tienes ninguna."
+        )
         return
 
     await update.effective_message.reply_text(
@@ -624,55 +641,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @restricted
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = is_admin(update.effective_user.id)
     mensaje = (
-        "📘 AYUDA RÁPIDA\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💸 MOVIMIENTOS\n"
+        "📘 Ayuda\n\n"
+        "💸 Movimientos\n"
         "• /gasto <monto> <categoría> <nota>\n"
-        "  Ejemplo: /gasto 25.50 Alimentacion almuerzo tarjeta AMEX\n"
         "• /ingreso <monto> <categoría> <nota>\n"
-        "  Ejemplo: /ingreso 1500 Sueldo quincena BCP\n"
-        "• /categoria <nombre> - Gasto del mes en una categoría\n\n"
-        "📊 REPORTES\n"
-        "• /resumen - Saldos de todas las cuentas y patrimonio neto\n"
-        "• /mes <MM/AAAA> - Balance mensual (por defecto mes actual)\n"
-        "• /reporte <MM/AAAA> - Exporta cierre mensual en PDF con gráficos\n\n"
-        "💳 DEUDAS\n"
-        "• /deudas - Lista de tarjetas de crédito con saldo pendiente\n"
-        "• /pagar <deuda_id> <monto> <cuenta_banco> [nota]\n"
-        "  Ejemplo: /pagar 1 250 BCP pago quincena\n"
-        "• Si llega un pago de tarjeta por Gmail y está en pendientes,\n"
-        "  al tocar ✅ se confirma automáticamente como pago de deuda (sin pedir categoría).\n"
-        "• También puedes usar /confirmar_pendiente o /cp para confirmar por comando.\n\n"
-        "🧾 GESTIÓN\n"
-        "• /editar <ID> <campo> <valor> - Edita una transacción\n"
-        "• /eliminar <ID> - Elimina una transacción\n"
-        "• /categorias - Listado de categorías\n"
-        "• /pendiente <tipo> <monto> <cuenta> <descripcion>\n"
-        "• /pendientes [N] - Lista movimientos pendientes\n"
-        "• /cp <ID> <categoria> [nota]  (alias corto de confirmar)\n"
-        "• /confirmar_pendiente <ID> <categoria> [nota]\n"
-        "• /dp <ID> [motivo]  (alias corto de descartar)\n"
-        "• /descartar_pendiente <ID> [motivo]\n"
-        "• /conciliar <cuenta> <saldo_real> [moneda]\n"
-        "• /snapshot - Guarda snapshot manual de saldos\n"
-        "• /refreshcache - Limpia caché en memoria y recarga desde Airtable\n\n"
-        "📬 GMAIL PUSH\n"
-        "• /gmail_watch - Crea o renueva el watch de Gmail Push\n"
-        "• /gmail_estado - Muestra el estado actual del watch\n"
-        "• /gmail_token_info - Muestra info del refresh token\n"
-        "• /gmail_regenerate_token - Guía para regenerar token si expiró\n"
-        "• /setear_gmail_token <token> - Actualiza el refresh token\n\n"
-        "🎙️ VOZ\n"
-        "• Envía una nota de voz con el comando en lenguaje natural.\n"
-        "• El bot transcribe, interpreta y te pedirá confirmar antes de registrar.\n"
-        "• Botones: Confirmar / Editar / Cancelar\n\n"
-        "✨ CONSEJOS\n"
-        "• Tildes y mayúsculas se ignoran.\n"
-        "• Para cuentas, escribe el nombre tal cual (BCP, AMEX, Efectivo).\n"
-        "• Puedes usar USD: /gasto 20 USD Comida\n\n"
-        "Escribe /ayuda o /help cuando quieras volver a ver esta lista."
+        "• /categoria <nombre>\n\n"
+        "📊 Reportes\n"
+        "• /resumen\n"
+        "• /mes <MM/AAAA>\n"
+        "• /reporte <MM/AAAA>\n\n"
+        "💳 Deudas\n"
+        "• /deudas\n"
+        "• /pagar <deuda_id> <monto> <cuenta_banco> [nota]\n\n"
+        "🧾 Gestión\n"
+        "• /editar <ID> <campo> <valor>\n"
+        "• /eliminar <ID>\n"
+        "• /categorias\n"
+        "• /snapshot\n\n"
+        "Ejemplos:\n"
+        "• /gasto 25.50 Alimentacion almuerzo BCP\n"
+        "• /ingreso 1500 Sueldo pago mensual BCP"
     )
+
+    if admin:
+        mensaje += (
+            "\n\n🔐 Admin y operación\n"
+            "• /admin_users\n"
+            "• /admin_add_user <telegram_id> <nombre>\n"
+            "• /admin_block_user <telegram_id>\n"
+            "• /mi_config\n"
+            "• /configurar\n"
+            "• /pendiente <tipo> <monto> <cuenta> <descripcion>\n"
+            "• /pendientes [N]\n"
+            "• /cp <ID> <categoria> [nota]\n"
+            "• /dp <ID> [motivo]\n"
+            "• /confirmar_pendiente <ID> <categoria> [nota]\n"
+            "• /descartar_pendiente <ID> [motivo]\n"
+            "• /conciliar <cuenta> <saldo_real> [moneda]\n"
+            "• /refreshcache\n\n"
+            "📬 Gmail\n"
+            "• /gmail_watch\n"
+            "• /gmail_estado\n"
+            "• /gmail_token_info\n"
+            "• /gmail_regenerate_token\n"
+            "• /setear_gmail_token <token>"
+        )
 
     await update.effective_message.reply_text(mensaje)
 
@@ -2284,37 +2299,41 @@ def main():
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
 
     async def _configurar_comandos(application):
-        await application.bot.set_my_commands(
-            [
-                BotCommand("start", "Iniciar el bot"),
-                BotCommand("help", "Mostrar ayuda"),
-                BotCommand("ayuda", "Mostrar ayuda en español"),
-                BotCommand("gasto", "Registrar un gasto"),
-                BotCommand("ingreso", "Registrar un ingreso"),
-                BotCommand("resumen", "Ver resumen"),
-                BotCommand("mes", "Balance del mes"),
-                BotCommand("reporte", "Reporte del mes"),
-                BotCommand("categoria", "Gasto por categoría"),
-                BotCommand("categorias", "Listar categorías"),
-                BotCommand("deudas", "Ver deudas"),
-                BotCommand("pagar", "Pagar una deuda"),
-                BotCommand("pagar_deuda", "Pagar una deuda"),
-                BotCommand("pendiente", "Registrar pendiente"),
-                BotCommand("pendientes", "Listar pendientes"),
-                BotCommand("cp", "Confirmar pendiente"),
-                BotCommand("confirmar_pendiente", "Confirmar pendiente"),
-                BotCommand("dp", "Descartar pendiente"),
-                BotCommand("descartar_pendiente", "Descartar pendiente"),
-                BotCommand("conciliar", "Conciliar una cuenta"),
-                BotCommand("snapshot", "Guardar snapshot de saldos"),
-                BotCommand("refreshcache", "Refrescar caché de Airtable"),
-                BotCommand("configurar", "Configuración inicial"),
-                BotCommand("mi_config", "Ver configuración del usuario"),
-                BotCommand("admin_users", "Admin: listar usuarios"),
-                BotCommand("admin_add_user", "Admin: autorizar usuario"),
-                BotCommand("admin_block_user", "Admin: bloquear usuario"),
-            ]
-        )
+        comandos_usuario = [
+            BotCommand("start", "Iniciar el bot"),
+            BotCommand("help", "Mostrar ayuda"),
+            BotCommand("ayuda", "Mostrar ayuda"),
+            BotCommand("gasto", "Registrar un gasto"),
+            BotCommand("ingreso", "Registrar un ingreso"),
+            BotCommand("resumen", "Ver resumen"),
+            BotCommand("mes", "Balance del mes"),
+            BotCommand("reporte", "Reporte del mes"),
+            BotCommand("categoria", "Gasto por categoría"),
+            BotCommand("categorias", "Listar categorías"),
+            BotCommand("deudas", "Ver deudas"),
+            BotCommand("pagar", "Pagar una deuda"),
+            BotCommand("editar", "Editar transacción"),
+            BotCommand("eliminar", "Eliminar transacción"),
+            BotCommand("snapshot", "Guardar snapshot de saldos"),
+        ]
+        comandos_admin = comandos_usuario + [
+            BotCommand("configurar", "Configuración inicial"),
+            BotCommand("mi_config", "Ver configuración del usuario"),
+            BotCommand("admin_users", "Admin: listar usuarios"),
+            BotCommand("admin_add_user", "Admin: autorizar usuario"),
+            BotCommand("admin_block_user", "Admin: bloquear usuario"),
+            BotCommand("pendiente", "Registrar pendiente"),
+            BotCommand("pendientes", "Listar pendientes"),
+            BotCommand("cp", "Confirmar pendiente"),
+            BotCommand("dp", "Descartar pendiente"),
+            BotCommand("conciliar", "Conciliar una cuenta"),
+            BotCommand("refreshcache", "Refrescar caché"),
+            BotCommand("gmail_watch", "Gmail: renovar watch"),
+            BotCommand("gmail_estado", "Gmail: ver estado"),
+            BotCommand("gmail_token_info", "Gmail: token info"),
+        ]
+        await application.bot.set_my_commands(comandos_usuario, scope=BotCommandScopeDefault())
+        await application.bot.set_my_commands(comandos_admin, scope=BotCommandScopeChat(config.ADMIN_TELEGRAM_USER_ID))
 
 
     app.post_init = _configurar_comandos

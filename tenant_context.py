@@ -176,6 +176,29 @@ def list_users():
     return sorted(users, key=lambda item: (item["estado"], item["nombre"], item["telegram_user_id"]))
 
 
+def telegram_user_id_for_tenant(tenant_id):
+    tenant_id = str(tenant_id or "").strip()
+    if not tenant_id:
+        return ""
+    active_owner = ""
+    active_any = ""
+    for record in _list_all_usuarios():
+        fields = _fields(record)
+        if str(fields.get("TenantID", "")).strip() != tenant_id:
+            continue
+        if str(fields.get("Estado", "")).strip().lower() != "activo":
+            continue
+        telegram_id = str(fields.get("TelegramUserID", "")).strip()
+        if not telegram_id:
+            continue
+        if str(fields.get("Rol", "")).strip().lower() in {"admin", "owner"}:
+            active_owner = telegram_id
+            break
+        if not active_any:
+            active_any = telegram_id
+    return active_owner or active_any
+
+
 def block_user(telegram_user_id):
     user = find_user_by_telegram(telegram_user_id)
     if not user:

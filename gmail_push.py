@@ -693,7 +693,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
         pass
 
     mensajes, current_history_id = _obtener_mensajes_desde_historial(last_history_id, tenant_id=tenant_id)
-    stats = {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0}
+    stats = {"registrados": 0, "duplicados": 0, "omitidos": 0, "errores": 0, "tenant_id": tenant_id}
     nuevos_ids = []
 
     for message_id in mensajes:
@@ -777,6 +777,7 @@ def _procesar_notificacion_gmail_push_sync(envelope):
 
     stats["nuevos_ids"] = nuevos_ids
     stats["history_id"] = current_history_id or notification_history_id or last_history_id
+    stats["tenant_id"] = tenant_id
     return stats
 
 

@@ -254,6 +254,12 @@ Tambien se puede autorizar manualmente:
 /configurar finalizar
 ```
 
+## Ayuda Y Comandos Visibles
+
+`/help` y `/ayuda` muestran una ayuda reducida para usuarios finales: movimientos, reportes, deudas y gestion basica. El admin ve comandos operativos adicionales.
+
+El menu de comandos de Telegram usa una lista reducida por defecto y una lista ampliada para `ADMIN_TELEGRAM_USER_ID`.
+
 ## Validaciones Antes De Pasar A `main`
 
 1. Hacer backup/export de Airtable.
@@ -340,6 +346,7 @@ Reglas:
 
 - Cada mailbox vigilado debe tener `watch_email` guardado en `GmailEstado` con su `TenantID`.
 - La deteccion de cuenta por ultimos digitos siempre debe ejecutarse con ese `tenant_id`.
+- Las notificaciones Telegram de Gmail deben enviarse al `TelegramUserID` activo asociado al `TenantID`; no a un `USER_ID` global.
 - Mientras Gmail use un token OAuth global, debe mantenerse habilitado solo para el admin o para tenants que tengan token/estado propio.
 
 ## Riesgos Pendientes
