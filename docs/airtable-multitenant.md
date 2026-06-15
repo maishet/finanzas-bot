@@ -349,6 +349,18 @@ Reglas:
 - Las notificaciones Telegram de Gmail deben enviarse al `TelegramUserID` activo asociado al `TenantID`; no a un `USER_ID` global.
 - Mientras Gmail use un token OAuth global, debe mantenerse habilitado solo para el admin o para tenants que tengan token/estado propio.
 
+## Jobs Automaticos
+
+Los jobs automaticos no deben enviar mensajes a `USER_ID` global. Deben resolver el chat desde el tenant:
+
+```text
+TenantID -> Usuarios.TelegramUserID activo
+```
+
+Esto aplica a recordatorios de deudas, Gmail Push y cualquier alerta programada.
+
+Los recordatorios de deudas recorren tenants activos con setup completo y envian solo las deudas de cada tenant.
+
 ## Riesgos Pendientes
 
 - `airtable_handler.py` se mantiene como servicio financiero principal, pero sus lecturas y escrituras financieras deben recibir `tenant_id` y filtrar por `TenantID`.

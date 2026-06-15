@@ -67,6 +67,42 @@ ACCESS_REQUESTS_KEY = "access_requests"
 VENTANAS_RECORDATORIO_DIAS = (7, 3, 1)
 
 
+def _chat_id_para_tenant(tenant_id):
+    chat_id = telegram_user_id_for_tenant(tenant_id)
+    if not chat_id and str(tenant_id or "").strip() == str(config.SYSTEM_TENANT_ID or "").strip():
+        chat_id = config.ADMIN_TELEGRAM_USER_ID
+    if not chat_id:
+        return None
+    try:
+        return int(chat_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tenant_ids_activos_para_jobs():
+    tenant_ids = []
+    vistos = set()
+    try:
+        for user in tenant_list_users():
+            tenant_id = str(user.get("tenant_id", "")).strip()
+            if not tenant_id or tenant_id in vistos:
+                continue
+            if str(user.get("estado", "")).strip().lower() != "activo":
+                continue
+            if not user.get("setup_completo"):
+                continue
+            tenant_ids.append(tenant_id)
+            vistos.add(tenant_id)
+    except Exception as e:
+        logger.warning("No se pudieron listar tenants activos para jobs: %s", e)
+
+    system_tenant = str(config.SYSTEM_TENANT_ID or "").strip()
+    if system_tenant and system_tenant not in vistos:
+        tenant_ids.append(system_tenant)
+
+    return tenant_ids
+
+
 def _normalizar_texto(txt: str) -> str:
     txt = (txt or "").lower().strip()
     replacements = {
@@ -197,7 +233,7 @@ class GmailPushHandler(tornado.web.RequestHandler):
             try:
                 nuevos = stats.get("nuevos_ids", [])
                 tenant_id = str(stats.get("tenant_id", "")).strip()
-                chat_id = telegram_user_id_for_tenant(tenant_id) or config.ADMIN_TELEGRAM_USER_ID
+                chat_id = _chat_id_para_tenant(tenant_id) or config.ADMIN_TELEGRAM_USER_ID
                 mensaje = (
                     "📬 Gmail Push detectó nuevos movimientos\n"
                     f"TenantID: {tenant_id or '—'}\n"
@@ -1786,43 +1822,49 @@ async def enviar_recordatorios_deuda(context: ContextTypes.DEFAULT_TYPE):
     if getattr(context, "job", None) and isinstance(context.job.data, int):
         ventana = context.job.data
 
-    try:
-        recordatorios = obtener_recordatorios_deudas(dias_alerta=max(7, ventana), tenant_id=config.SYSTEM_TENANT_ID)
-    except Exception as e:
-        logger.error(f"Error generando recordatorios de deuda: {e}")
-        return
-
-    if not recordatorios:
-        return
-
     objetivos = {ventana}
     # Para ventana 1 día también avisamos el día de vencimiento.
     if ventana == 1:
         objetivos.add(0)
 
-    filtrados = [r for r in recordatorios if r.get("dias_restantes") in objetivos]
-    if not filtrados:
-        return
+    for tenant_id in _tenant_ids_activos_para_jobs():
+        try:
+            recordatorios = obtener_recordatorios_deudas(dias_alerta=max(7, ventana), tenant_id=tenant_id)
+        except Exception as e:
+            logger.error("Error generando recordatorios de deuda | tenant=%s error=%s", tenant_id, e)
+            continue
 
-    titulo = f"⏰ *Recordatorios de Deudas ({ventana} día(s) antes)*"
-    if ventana == 1:
-        titulo = "⏰ *Recordatorios de Deudas (1 día antes / hoy)*"
+        filtrados = [r for r in recordatorios if r.get("dias_restantes") in objetivos]
+        if not filtrados:
+            continue
 
-    lineas = [titulo]
-    for r in filtrados:
-        estado = _texto_estado_deuda(r["dias_restantes"])
+        chat_id = _chat_id_para_tenant(tenant_id)
+        if not chat_id:
+            logger.warning("Recordatorio de deuda omitido: no hay chat Telegram activo para tenant=%s", tenant_id)
+            continue
 
-        lineas.append(
-            f"\n• {r['descripcion']} ({r['cuenta']})\n"
-            f"  Pendiente: {r['moneda']} {r['pendiente']:,.2f}\n"
-            f"  Vencimiento: {r['vencimiento']} - {estado}"
-        )
+        titulo = f"⏰ *Recordatorios de Deudas ({ventana} día(s) antes)*"
+        if ventana == 1:
+            titulo = "⏰ *Recordatorios de Deudas (1 día antes / hoy)*"
 
-    await context.bot.send_message(
-        chat_id=config.USER_ID,
-        text="\n".join(lineas),
-        parse_mode="Markdown"
-    )
+        lineas = [titulo]
+        for r in filtrados:
+            estado = _texto_estado_deuda(r["dias_restantes"])
+
+            lineas.append(
+                f"\n• {r['descripcion']} ({r['cuenta']})\n"
+                f"  Pendiente: {r['moneda']} {r['pendiente']:,.2f}\n"
+                f"  Vencimiento: {r['vencimiento']} - {estado}"
+            )
+
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="\n".join(lineas),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.warning("No se pudo enviar recordatorio de deuda | tenant=%s chat_id=%s error=%s", tenant_id, chat_id, e)
 
 
 async def enviar_keepalive(context: ContextTypes.DEFAULT_TYPE):
