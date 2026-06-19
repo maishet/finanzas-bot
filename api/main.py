@@ -6,6 +6,11 @@ import config
 from api.auth_service import request_login_code, verify_login_code
 from api.dependencies import current_tenant_id
 from api.mobile_service import (
+    confirm_pending_movement_action,
+    create_snapshot_action,
+    create_transaction_action,
+    delete_transaction_action,
+    discard_pending_movement_action,
     get_accounts_payload,
     get_debts_payload,
     get_me_payload,
@@ -13,10 +18,21 @@ from api.mobile_service import (
     get_summary_payload,
     get_transactions_payload,
     get_version_payload,
+    pay_debt_action,
+    update_transaction_action,
 )
 from api.security import MobileAPIError
 from api.security import validate_mobile_api_key
-from api.schemas import RequestCodeRequest, VerifyCodeRequest
+from api.schemas import (
+    ConfirmPendingMovementRequest,
+    CreateSnapshotRequest,
+    CreateTransactionRequest,
+    DiscardPendingMovementRequest,
+    PayDebtRequest,
+    RequestCodeRequest,
+    UpdateTransactionRequest,
+    VerifyCodeRequest,
+)
 from tenant_context import TenantContextError
 
 
@@ -37,6 +53,10 @@ def create_app():
     @app.exception_handler(TenantContextError)
     async def tenant_context_error_handler(_, exc):
         return JSONResponse(status_code=403, content={"ok": False, "error": "tenant_access_denied", "message": str(exc)})
+
+    @app.exception_handler(ValueError)
+    async def value_error_handler(_, exc):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "bad_request", "message": str(exc)})
 
     @app.get("/healthz")
     def healthz():
@@ -82,6 +102,34 @@ def create_app():
     @app.get("/api/pending-movements")
     def pending_movements(limit: int = Query(default=50, ge=1, le=200), tenant_id: str = Depends(current_tenant_id)):
         return {"ok": True, "data": get_pending_movements_payload(tenant_id, limit=limit)}
+
+    @app.post("/api/transactions")
+    def create_transaction(body: CreateTransactionRequest, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": create_transaction_action(tenant_id, body.dict())}
+
+    @app.patch("/api/transactions/{transaction_id}")
+    def update_transaction(transaction_id: str, body: UpdateTransactionRequest, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": update_transaction_action(tenant_id, transaction_id, body.dict())}
+
+    @app.delete("/api/transactions/{transaction_id}")
+    def delete_transaction(transaction_id: str, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": delete_transaction_action(tenant_id, transaction_id)}
+
+    @app.post("/api/debts/{debt_id}/pay")
+    def pay_debt(debt_id: str, body: PayDebtRequest, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": pay_debt_action(tenant_id, debt_id, body.dict())}
+
+    @app.post("/api/pending-movements/{pending_id}/confirm")
+    def confirm_pending_movement(pending_id: str, body: ConfirmPendingMovementRequest, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": confirm_pending_movement_action(tenant_id, pending_id, body.dict())}
+
+    @app.post("/api/pending-movements/{pending_id}/discard")
+    def discard_pending_movement(pending_id: str, body: DiscardPendingMovementRequest, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": discard_pending_movement_action(tenant_id, pending_id, body.dict())}
+
+    @app.post("/api/snapshots")
+    def create_snapshot(body: CreateSnapshotRequest, tenant_id: str = Depends(current_tenant_id)):
+        return {"ok": True, "data": create_snapshot_action(tenant_id, body.dict())}
 
     return app
 

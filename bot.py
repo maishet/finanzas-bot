@@ -40,6 +40,11 @@ from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
 from voice_interpreter import interpretar_transcripcion, validar_payload
 from api.auth_service import request_login_code, verify_login_code
 from api.mobile_service import (
+    confirm_pending_movement_action,
+    create_snapshot_action,
+    create_transaction_action,
+    delete_transaction_action,
+    discard_pending_movement_action,
     get_accounts_payload,
     get_debts_payload,
     get_me_payload,
@@ -47,6 +52,8 @@ from api.mobile_service import (
     get_summary_payload,
     get_transactions_payload,
     get_version_payload,
+    pay_debt_action,
+    update_transaction_action,
 )
 from api.security import MobileAPIError, resolve_mobile_tenant, validate_mobile_api_key
 from tenant_context import (
@@ -278,7 +285,7 @@ class MobileAPIHandler(tornado.web.RequestHandler):
         elif origin and origin in allowed:
             self.set_header("Access-Control-Allow-Origin", origin)
         self.set_header("Vary", "Origin")
-        self.set_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Mobile-Api-Key, X-Tenant-ID")
         self.set_header("Content-Type", "application/json; charset=UTF-8")
 
@@ -296,6 +303,12 @@ class MobileAPIHandler(tornado.web.RequestHandler):
     def _write_payload(self, status_code, payload):
         self.set_status(status_code)
         self.write(payload)
+
+    def _json_body(self):
+        try:
+            return json.loads(self.request.body.decode("utf-8") or "{}")
+        except Exception as exc:
+            raise MobileAPIError(400, "JSON invalido.", "invalid_json") from exc
 
     def get(self, endpoint):
         try:
@@ -328,6 +341,105 @@ class MobileAPIHandler(tornado.web.RequestHandler):
         except Exception as exc:
             logger.exception("Error en Mobile API endpoint=%s", endpoint)
             self._write_payload(500, {"ok": False, "error": "internal_error", "message": str(exc)})
+
+    def post(self, endpoint):
+        try:
+            endpoint = str(endpoint or "").strip()
+            if endpoint != "transactions":
+                raise MobileAPIError(404, "Endpoint no encontrado.", "not_found")
+            tenant_id = self._tenant_id()
+            payload = create_transaction_action(tenant_id, self._json_body())
+            self._write_payload(200, {"ok": True, "data": payload})
+        except TenantContextError as exc:
+            self._write_payload(403, {"ok": False, "error": "tenant_access_denied", "message": str(exc)})
+        except MobileAPIError as exc:
+            self._write_payload(exc.status_code, exc.to_payload())
+        except ValueError as exc:
+            self._write_payload(400, {"ok": False, "error": "bad_request", "message": str(exc)})
+        except Exception as exc:
+            logger.exception("Error en Mobile API POST endpoint=%s", endpoint)
+            self._write_payload(500, {"ok": False, "error": "internal_error", "message": str(exc)})
+
+
+class MobileActionAPIHandler(tornado.web.RequestHandler):
+    """Mobile write-intent API mounted on the current Tornado server."""
+
+    def set_default_headers(self):
+        origin = self.request.headers.get("Origin", "")
+        allowed = list(config.MOBILE_API_ALLOWED_ORIGINS or [])
+        if "*" in allowed:
+            self.set_header("Access-Control-Allow-Origin", origin or "*")
+        elif origin and origin in allowed:
+            self.set_header("Access-Control-Allow-Origin", origin)
+        self.set_header("Vary", "Origin")
+        self.set_header("Access-Control-Allow-Methods", "POST, PATCH, DELETE, OPTIONS")
+        self.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Mobile-Api-Key, X-Tenant-ID")
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+
+    def options(self, *args):
+        self.set_status(204)
+        self.finish()
+
+    def _tenant_id(self):
+        return resolve_mobile_tenant(
+            api_key=self.request.headers.get("X-Mobile-Api-Key", ""),
+            tenant_id=self.request.headers.get("X-Tenant-ID", ""),
+            authorization=self.request.headers.get("Authorization", ""),
+        )
+
+    def _json_body(self):
+        try:
+            return json.loads(self.request.body.decode("utf-8") or "{}")
+        except Exception as exc:
+            raise MobileAPIError(400, "JSON invalido.", "invalid_json") from exc
+
+    def _write_payload(self, status_code, payload):
+        self.set_status(status_code)
+        self.write(payload)
+
+    def _handle(self, action, *args):
+        try:
+            tenant_id = self._tenant_id()
+            body = self._json_body() if self.request.method in {"POST", "PATCH"} else {}
+            payload = action(tenant_id, body, *args)
+            self._write_payload(200, {"ok": True, "data": payload})
+        except TenantContextError as exc:
+            self._write_payload(403, {"ok": False, "error": "tenant_access_denied", "message": str(exc)})
+        except MobileAPIError as exc:
+            self._write_payload(exc.status_code, exc.to_payload())
+        except ValueError as exc:
+            self._write_payload(400, {"ok": False, "error": "bad_request", "message": str(exc)})
+        except Exception as exc:
+            logger.exception("Error en Mobile Action API path=%s", self.request.path)
+            self._write_payload(500, {"ok": False, "error": "internal_error", "message": str(exc)})
+
+    def post(self, resource, item_id=None, subaction=None):
+        resource = str(resource or "").strip()
+        subaction = str(subaction or "").strip()
+        if resource == "transactions" and not item_id:
+            self._handle(lambda tenant_id, body: create_transaction_action(tenant_id, body))
+        elif resource == "debts" and item_id and subaction == "pay":
+            self._handle(lambda tenant_id, body, debt_id: pay_debt_action(tenant_id, debt_id, body), item_id)
+        elif resource == "pending-movements" and item_id and subaction == "confirm":
+            self._handle(lambda tenant_id, body, pending_id: confirm_pending_movement_action(tenant_id, pending_id, body), item_id)
+        elif resource == "pending-movements" and item_id and subaction == "discard":
+            self._handle(lambda tenant_id, body, pending_id: discard_pending_movement_action(tenant_id, pending_id, body), item_id)
+        elif resource == "snapshots" and not item_id:
+            self._handle(lambda tenant_id, body: create_snapshot_action(tenant_id, body))
+        else:
+            self._write_payload(404, {"ok": False, "error": "not_found", "message": "Endpoint no encontrado."})
+
+    def patch(self, resource, item_id=None, subaction=None):
+        if str(resource or "").strip() == "transactions" and item_id and not subaction:
+            self._handle(lambda tenant_id, body, trans_id: update_transaction_action(tenant_id, trans_id, body), item_id)
+        else:
+            self._write_payload(404, {"ok": False, "error": "not_found", "message": "Endpoint no encontrado."})
+
+    def delete(self, resource, item_id=None, subaction=None):
+        if str(resource or "").strip() == "transactions" and item_id and not subaction:
+            self._handle(lambda tenant_id, _body, trans_id: delete_transaction_action(tenant_id, trans_id), item_id)
+        else:
+            self._write_payload(404, {"ok": False, "error": "not_found", "message": "Endpoint no encontrado."})
 
 
 class MobileAuthAPIHandler(tornado.web.RequestHandler):
@@ -404,6 +516,7 @@ class RenderWebhookApp(tornado.web.Application):
             (r"/healthz/?", HealthHandler),
             (r"/api/auth/(request-code|verify-code)/?", MobileAuthAPIHandler),
             (r"/api/(version|me|accounts|summary|transactions|debts|pending-movements)/?", MobileAPIHandler),
+            (r"/api/(transactions|debts|pending-movements|snapshots)(?:/([^/]+))?(?:/([^/]+))?/?", MobileActionAPIHandler),
             (rf"{webhook_path}/?", TelegramHandler, shared_objects),
             (r"/gmail/push/?", GmailPushHandler, shared_objects),
         ]

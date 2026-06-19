@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -118,3 +118,41 @@ class VerifyCodeResponseData(BaseModel):
     tenant_id: str
     telegram_user_id: str
     rol: str
+
+
+class CreateTransactionRequest(BaseModel):
+    tipo: str
+    monto: float
+    moneda: str = "PEN"
+    categoria: str
+    subcategoria: str = ""
+    cuenta: str = "Efectivo"
+    metodo: str = "Efectivo"
+    nota: str = ""
+    fecha: Optional[str] = None
+
+
+class UpdateTransactionRequest(BaseModel):
+    campo: str
+    valor: Union[str, float]
+
+
+class PayDebtRequest(BaseModel):
+    monto: float
+    moneda: str = "PEN"
+    cuenta: str
+    nota: str = ""
+
+
+class ConfirmPendingMovementRequest(BaseModel):
+    categoria: str
+    nota: str = ""
+
+
+class DiscardPendingMovementRequest(BaseModel):
+    motivo: str = ""
+
+
+class CreateSnapshotRequest(BaseModel):
+    origen: str = "Mobile"
+    fecha: Optional[str] = None
