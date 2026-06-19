@@ -38,6 +38,16 @@ from airtable_handler import (obtener_categorias,
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
 from voice_interpreter import interpretar_transcripcion, validar_payload
+from api.mobile_service import (
+    get_accounts_payload,
+    get_debts_payload,
+    get_me_payload,
+    get_pending_movements_payload,
+    get_summary_payload,
+    get_transactions_payload,
+    get_version_payload,
+)
+from api.security import MobileAPIError, require_tenant_header, validate_mobile_api_key
 from tenant_context import (
     TenantContextError,
     block_user as tenant_block_user,
@@ -252,6 +262,70 @@ class GmailPushHandler(tornado.web.RequestHandler):
         self.write({"ok": True, "stats": stats})
 
 
+class MobileAPIHandler(tornado.web.RequestHandler):
+    """Read-only mobile API mounted on the current Tornado webhook server.
+
+    FastAPI lives in api/main.py for the future API entrypoint; this handler keeps
+    Render's existing Telegram webhook process working during Phase 1.
+    """
+
+    def set_default_headers(self):
+        origin = self.request.headers.get("Origin", "")
+        allowed = list(config.MOBILE_API_ALLOWED_ORIGINS or [])
+        if "*" in allowed:
+            self.set_header("Access-Control-Allow-Origin", origin or "*")
+        elif origin and origin in allowed:
+            self.set_header("Access-Control-Allow-Origin", origin)
+        self.set_header("Vary", "Origin")
+        self.set_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Mobile-Api-Key, X-Tenant-ID")
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+
+    def options(self, endpoint=None):
+        self.set_status(204)
+        self.finish()
+
+    def _tenant_id(self):
+        validate_mobile_api_key(self.request.headers.get("X-Mobile-Api-Key", ""))
+        return require_tenant_header(self.request.headers.get("X-Tenant-ID", ""))
+
+    def _write_payload(self, status_code, payload):
+        self.set_status(status_code)
+        self.write(payload)
+
+    def get(self, endpoint):
+        try:
+            endpoint = str(endpoint or "").strip()
+            if endpoint == "version":
+                self._write_payload(200, get_version_payload())
+                return
+
+            tenant_id = self._tenant_id()
+            if endpoint == "me":
+                payload = get_me_payload(tenant_id)
+            elif endpoint == "accounts":
+                payload = get_accounts_payload(tenant_id)
+            elif endpoint == "summary":
+                payload = get_summary_payload(tenant_id)
+            elif endpoint == "transactions":
+                payload = get_transactions_payload(tenant_id, limit=int(self.get_query_argument("limit", "50")))
+            elif endpoint == "debts":
+                payload = get_debts_payload(tenant_id)
+            elif endpoint == "pending-movements":
+                payload = get_pending_movements_payload(tenant_id, limit=int(self.get_query_argument("limit", "50")))
+            else:
+                raise MobileAPIError(404, "Endpoint no encontrado.", "not_found")
+
+            self._write_payload(200, {"ok": True, "data": payload})
+        except MobileAPIError as exc:
+            self._write_payload(exc.status_code, exc.to_payload())
+        except ValueError as exc:
+            self._write_payload(400, {"ok": False, "error": "bad_request", "message": str(exc)})
+        except Exception as exc:
+            logger.exception("Error en Mobile API endpoint=%s", endpoint)
+            self._write_payload(500, {"ok": False, "error": "internal_error", "message": str(exc)})
+
+
 class RenderWebhookApp(tornado.web.Application):
     """Webhook app con endpoints de salud para plataformas como Render."""
 
@@ -264,6 +338,7 @@ class RenderWebhookApp(tornado.web.Application):
         handlers = [
             (r"/", HealthHandler),
             (r"/healthz/?", HealthHandler),
+            (r"/api/(version|me|accounts|summary|transactions|debts|pending-movements)/?", MobileAPIHandler),
             (rf"{webhook_path}/?", TelegramHandler, shared_objects),
             (r"/gmail/push/?", GmailPushHandler, shared_objects),
         ]

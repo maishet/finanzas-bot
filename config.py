@@ -93,3 +93,7 @@ else:
 
 # Zona horaria por defecto para timestamps (usar nombre IANA, p.ej. America/Lima)
 TIMEZONE = os.getenv("TIMEZONE", "America/Lima")
+
+# API movil (Fase 1): proteccion temporal hasta implementar OTP + JWT.
+MOBILE_API_KEY = os.getenv("MOBILE_API_KEY", "").strip()
+MOBILE_API_ALLOWED_ORIGINS = _parse_csv_env("MOBILE_API_ALLOWED_ORIGINS") or ["*"]
