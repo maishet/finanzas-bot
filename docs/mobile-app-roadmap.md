@@ -88,6 +88,15 @@ Endpoints:
 - `POST /api/auth/verify-code`
 - `POST /api/auth/logout`
 
+Implementacion acordada para esta fase:
+
+- `request-code` usa `X-Mobile-Api-Key` como proteccion temporal contra abuso.
+- `verify-code` usa `X-Mobile-Api-Key` y devuelve un JWT.
+- Los endpoints financieros aceptan `Authorization: Bearer <jwt>`.
+- Mientras la app termina de migrar a JWT, los endpoints financieros tambien pueden aceptar `X-Mobile-Api-Key` + `X-Tenant-ID`.
+- La tabla `AuthCodes` vive temporalmente en Airtable.
+- Cuando se migre a Supabase, `AuthCodes` pasara a Postgres o se reemplazara por Supabase Auth.
+
 Datos del JWT:
 
 - `tenant_id`

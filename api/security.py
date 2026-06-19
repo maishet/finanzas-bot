@@ -1,6 +1,7 @@
 import hmac
 
 import config
+from api.auth_service import verify_jwt
 
 
 class MobileAPIError(Exception):
@@ -33,3 +34,24 @@ def require_tenant_header(tenant_id):
     if not tenant_id:
         raise MobileAPIError(400, "X-Tenant-ID es obligatorio para endpoints financieros.", "missing_tenant_id")
     return tenant_id
+
+
+def tenant_from_bearer_token(authorization):
+    raw = str(authorization or "").strip()
+    if not raw:
+        return ""
+    scheme, _, token = raw.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise MobileAPIError(401, "Authorization debe usar Bearer token.", "invalid_authorization")
+    try:
+        payload = verify_jwt(token.strip())
+    except ValueError as exc:
+        raise MobileAPIError(401, str(exc), "invalid_token") from exc
+    return require_tenant_header(payload.get("tenant_id", ""))
+
+
+def resolve_mobile_tenant(api_key="", tenant_id="", authorization=""):
+    if str(authorization or "").strip():
+        return tenant_from_bearer_token(authorization)
+    validate_mobile_api_key(api_key)
+    return require_tenant_header(tenant_id)

@@ -1,8 +1,9 @@
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import config
+from api.auth_service import request_login_code, verify_login_code
 from api.dependencies import current_tenant_id
 from api.mobile_service import (
     get_accounts_payload,
@@ -14,6 +15,9 @@ from api.mobile_service import (
     get_version_payload,
 )
 from api.security import MobileAPIError
+from api.security import validate_mobile_api_key
+from api.schemas import RequestCodeRequest, VerifyCodeRequest
+from tenant_context import TenantContextError
 
 
 def create_app():
@@ -30,6 +34,10 @@ def create_app():
     async def mobile_api_error_handler(_, exc):
         return JSONResponse(status_code=exc.status_code, content=exc.to_payload())
 
+    @app.exception_handler(TenantContextError)
+    async def tenant_context_error_handler(_, exc):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "tenant_access_denied", "message": str(exc)})
+
     @app.get("/healthz")
     def healthz():
         return {"ok": True}
@@ -37,6 +45,19 @@ def create_app():
     @app.get("/api/version")
     def version():
         return get_version_payload()
+
+    @app.post("/api/auth/request-code")
+    def auth_request_code(body: RequestCodeRequest, x_mobile_api_key: str = Header(default="", alias="X-Mobile-Api-Key")):
+        validate_mobile_api_key(x_mobile_api_key)
+        return {"ok": True, "data": request_login_code(body.telegram_user_id)}
+
+    @app.post("/api/auth/verify-code")
+    def auth_verify_code(body: VerifyCodeRequest, x_mobile_api_key: str = Header(default="", alias="X-Mobile-Api-Key")):
+        validate_mobile_api_key(x_mobile_api_key)
+        try:
+            return {"ok": True, "data": verify_login_code(body.telegram_user_id, body.code)}
+        except ValueError as exc:
+            raise MobileAPIError(401, str(exc), "invalid_otp") from exc
 
     @app.get("/api/me")
     def me(tenant_id: str = Depends(current_tenant_id)):

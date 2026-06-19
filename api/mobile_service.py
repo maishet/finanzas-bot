@@ -23,8 +23,8 @@ def get_version_payload():
         "ok": True,
         "name": "finanzas-bot-mobile-api",
         "version": API_VERSION,
-        "phase": "phase-1-read-only",
-        "auth": "temporary-api-key",
+        "phase": "phase-2-otp-jwt",
+        "auth": "telegram-otp-jwt",
     }
 
 

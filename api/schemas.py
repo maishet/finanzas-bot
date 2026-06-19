@@ -93,3 +93,28 @@ class ErrorResponse(BaseModel):
     ok: bool = False
     error: str
     message: str
+
+
+class RequestCodeRequest(BaseModel):
+    telegram_user_id: str
+
+
+class RequestCodeResponseData(BaseModel):
+    telegram_user_id: str
+    tenant_id: str
+    expires_in_minutes: int
+    delivery: str
+
+
+class VerifyCodeRequest(BaseModel):
+    telegram_user_id: str
+    code: str
+
+
+class VerifyCodeResponseData(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in_hours: int
+    tenant_id: str
+    telegram_user_id: str
+    rol: str

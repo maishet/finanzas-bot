@@ -38,6 +38,7 @@ from airtable_handler import (obtener_categorias,
 from report_generator import generar_reporte_mensual_pdf
 from voice_transcriber import transcribe_audio_file, VoiceTranscriptionError
 from voice_interpreter import interpretar_transcripcion, validar_payload
+from api.auth_service import request_login_code, verify_login_code
 from api.mobile_service import (
     get_accounts_payload,
     get_debts_payload,
@@ -47,7 +48,7 @@ from api.mobile_service import (
     get_transactions_payload,
     get_version_payload,
 )
-from api.security import MobileAPIError, require_tenant_header, validate_mobile_api_key
+from api.security import MobileAPIError, resolve_mobile_tenant, validate_mobile_api_key
 from tenant_context import (
     TenantContextError,
     block_user as tenant_block_user,
@@ -286,8 +287,11 @@ class MobileAPIHandler(tornado.web.RequestHandler):
         self.finish()
 
     def _tenant_id(self):
-        validate_mobile_api_key(self.request.headers.get("X-Mobile-Api-Key", ""))
-        return require_tenant_header(self.request.headers.get("X-Tenant-ID", ""))
+        return resolve_mobile_tenant(
+            api_key=self.request.headers.get("X-Mobile-Api-Key", ""),
+            tenant_id=self.request.headers.get("X-Tenant-ID", ""),
+            authorization=self.request.headers.get("Authorization", ""),
+        )
 
     def _write_payload(self, status_code, payload):
         self.set_status(status_code)
@@ -326,6 +330,66 @@ class MobileAPIHandler(tornado.web.RequestHandler):
             self._write_payload(500, {"ok": False, "error": "internal_error", "message": str(exc)})
 
 
+class MobileAuthAPIHandler(tornado.web.RequestHandler):
+    """Authentication endpoints for the mobile app OTP flow."""
+
+    def set_default_headers(self):
+        origin = self.request.headers.get("Origin", "")
+        allowed = list(config.MOBILE_API_ALLOWED_ORIGINS or [])
+        if "*" in allowed:
+            self.set_header("Access-Control-Allow-Origin", origin or "*")
+        elif origin and origin in allowed:
+            self.set_header("Access-Control-Allow-Origin", origin)
+        self.set_header("Vary", "Origin")
+        self.set_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.set_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Mobile-Api-Key, X-Tenant-ID")
+        self.set_header("Content-Type", "application/json; charset=UTF-8")
+
+    def options(self, endpoint=None):
+        self.set_status(204)
+        self.finish()
+
+    def _json_body(self):
+        try:
+            return json.loads(self.request.body.decode("utf-8") or "{}")
+        except Exception as exc:
+            raise MobileAPIError(400, "JSON invalido.", "invalid_json") from exc
+
+    def _write_payload(self, status_code, payload):
+        self.set_status(status_code)
+        self.write(payload)
+
+    def post(self, endpoint):
+        try:
+            validate_mobile_api_key(self.request.headers.get("X-Mobile-Api-Key", ""))
+            body = self._json_body()
+            endpoint = str(endpoint or "").strip()
+            if endpoint == "request-code":
+                telegram_user_id = str(body.get("telegram_user_id", "")).strip()
+                if not telegram_user_id:
+                    raise MobileAPIError(400, "telegram_user_id es obligatorio.", "missing_telegram_user_id")
+                payload = request_login_code(telegram_user_id)
+            elif endpoint == "verify-code":
+                telegram_user_id = str(body.get("telegram_user_id", "")).strip()
+                code = str(body.get("code", "")).strip()
+                if not telegram_user_id or not code:
+                    raise MobileAPIError(400, "telegram_user_id y code son obligatorios.", "missing_otp_fields")
+                payload = verify_login_code(telegram_user_id, code)
+            else:
+                raise MobileAPIError(404, "Endpoint no encontrado.", "not_found")
+
+            self._write_payload(200, {"ok": True, "data": payload})
+        except TenantContextError as exc:
+            self._write_payload(403, {"ok": False, "error": "tenant_access_denied", "message": str(exc)})
+        except MobileAPIError as exc:
+            self._write_payload(exc.status_code, exc.to_payload())
+        except ValueError as exc:
+            self._write_payload(401, {"ok": False, "error": "invalid_otp", "message": str(exc)})
+        except Exception as exc:
+            logger.exception("Error en Mobile Auth API endpoint=%s", endpoint)
+            self._write_payload(500, {"ok": False, "error": "internal_error", "message": str(exc)})
+
+
 class RenderWebhookApp(tornado.web.Application):
     """Webhook app con endpoints de salud para plataformas como Render."""
 
@@ -338,6 +402,7 @@ class RenderWebhookApp(tornado.web.Application):
         handlers = [
             (r"/", HealthHandler),
             (r"/healthz/?", HealthHandler),
+            (r"/api/auth/(request-code|verify-code)/?", MobileAuthAPIHandler),
             (r"/api/(version|me|accounts|summary|transactions|debts|pending-movements)/?", MobileAPIHandler),
             (rf"{webhook_path}/?", TelegramHandler, shared_objects),
             (r"/gmail/push/?", GmailPushHandler, shared_objects),

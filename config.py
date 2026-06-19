@@ -97,3 +97,7 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Lima")
 # API movil (Fase 1): proteccion temporal hasta implementar OTP + JWT.
 MOBILE_API_KEY = os.getenv("MOBILE_API_KEY", "").strip()
 MOBILE_API_ALLOWED_ORIGINS = _parse_csv_env("MOBILE_API_ALLOWED_ORIGINS") or ["*"]
+MOBILE_JWT_SECRET = os.getenv("MOBILE_JWT_SECRET", MOBILE_API_KEY).strip()
+MOBILE_JWT_EXPIRES_HOURS = int(os.getenv("MOBILE_JWT_EXPIRES_HOURS", "168"))
+MOBILE_OTP_EXPIRES_MINUTES = int(os.getenv("MOBILE_OTP_EXPIRES_MINUTES", "10"))
+MOBILE_OTP_MAX_ATTEMPTS = int(os.getenv("MOBILE_OTP_MAX_ATTEMPTS", "5"))
