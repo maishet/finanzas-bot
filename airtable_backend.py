@@ -33,6 +33,7 @@ DEFAULT_HEADERS = {
     "MovimientosPendientes": ["TenantID", "ID", "FechaDetectada", "Fuente", "Cuenta", "Tipo", "Monto", "Moneda", "Descripcion", "Referencia", "Estado", "Confianza", "TXID", "FechaResolucion", "Observacion"],
     "GmailEstado": ["TenantID", "Clave", "Valor", "ActualizadoEn"],
     "SaldosHistoricos": ["TenantID", "SnapshotID", "FechaHora", "Cuenta", "TipoCuenta", "Moneda", "Saldo", "SaldoPEN", "Origen"],
+    "AuthCodes": ["TenantID", "TelegramUserID", "CodeHash", "ExpiresAt", "UsedAt", "CreatedAt", "Attempts"],
 }
 
 
@@ -182,6 +183,15 @@ DEFAULT_FIELD_DEFS = {
         _number("SaldoPEN"),
         _single_select("Origen", ["AutoDiario", "ManualTelegram"]),
     ],
+    "AuthCodes": [
+        _text("TenantID"),
+        _text("TelegramUserID"),
+        _text("CodeHash"),
+        _datetime("ExpiresAt"),
+        _datetime("UsedAt"),
+        _datetime("CreatedAt"),
+        _integer("Attempts"),
+    ],
 }
 
 
@@ -230,6 +240,10 @@ TEXT_FIELDS = {
     "TenantID",
     "UserID",
     "TelegramUserID",
+    "CodeHash",
+    "ExpiresAt",
+    "UsedAt",
+    "Attempts",
     "Rol",
     "Plan",
     "CreatedAt",
