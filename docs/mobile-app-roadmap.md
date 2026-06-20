@@ -274,6 +274,63 @@ Tareas:
 7. Cortar trafico a Supabase.
 8. Mantener Airtable como backup temporal.
 
+## Arquitectura Objetivo De Largo Plazo
+
+Decision estrategica: `Fint` debe evolucionar de un bot con app movil a una plataforma financiera personal completa. Telegram sera una integracion opcional o historica, no el nucleo del producto.
+
+Objetivo final:
+
+```text
+apps/
+  mobile/        Expo + React Native
+  web/           Next.js/React futuro
+
+backend/
+  api/           TypeScript, Hono/Fastify/Nest
+  workers/       TypeScript jobs e integraciones
+  integrations/  Gmail, Outlook, bancos, Telegram opcional
+
+packages/
+  shared-types/  contratos compartidos
+  validation/    Zod schemas
+  design-system/ componentes compartidos futuro
+
+database/
+  migrations/    Supabase/Postgres
+  seed/
+```
+
+Lineamientos:
+
+- Python se mantiene solo como backend de transicion durante mobile real, acciones y migracion a Supabase.
+- A largo plazo no se mantendra Python como legacy permanente.
+- El backend moderno sera TypeScript para tener un solo lenguaje entre app, web y API.
+- Supabase/Postgres reemplazara Airtable como base principal, pero no reemplaza la API de negocio.
+- La app enviara intenciones; el backend aplicara reglas financieras, auditoria e impacto en saldos/deudas.
+- Telegram, Gmail y Outlook seran integraciones, no arquitectura central.
+- La migracion Python -> TypeScript debe ser gradual, endpoint por endpoint, despues de estabilizar contratos y datos.
+
+Stack objetivo sugerido:
+
+- API: Hono o Fastify; Nest solo si la complejidad lo justifica.
+- DB: Supabase Postgres.
+- Auth: Supabase Auth.
+- Validacion: Zod.
+- ORM/query: Drizzle o Prisma.
+- Jobs: Trigger.dev, Inngest, BullMQ o workers propios.
+- Observabilidad: Sentry y logs estructurados.
+- Hosting: Fly.io, Railway, Render Pro o infraestructura equivalente.
+
+Orden recomendado para llegar ahi:
+
+1. Completar app movil real contra backend actual.
+2. Completar acciones desde la app.
+3. Terminar separacion services/repositories en Python.
+4. Migrar Airtable a Supabase/Postgres.
+5. Crear backend TypeScript con contratos compartidos.
+6. Migrar endpoints criticos uno por uno.
+7. Retirar Python cuando el backend TypeScript cubra API, jobs e integraciones necesarias.
+
 ## Evolucion De Autenticacion
 
 Ruta futura:
