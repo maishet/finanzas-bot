@@ -1,5 +1,6 @@
 import config
 from services.account_service import get_mobile_accounts, get_mobile_summary
+from services.category_service import get_mobile_categories
 from services.debt_service import get_mobile_debts
 from services.pending_service import get_mobile_pending_movements
 from services.transaction_service import get_mobile_transactions
@@ -60,6 +61,10 @@ def get_me(tenant_id):
 
 def get_accounts(tenant_id):
     return get_mobile_accounts(tenant_id)
+
+
+def get_categories(tenant_id, tipo=None):
+    return get_mobile_categories(tenant_id, tipo=tipo)
 
 
 def get_summary(tenant_id):
