@@ -325,7 +325,12 @@ class MobileAPIHandler(tornado.web.RequestHandler):
             elif endpoint == "summary":
                 payload = get_summary_payload(tenant_id)
             elif endpoint == "transactions":
-                payload = get_transactions_payload(tenant_id, limit=int(self.get_query_argument("limit", "50")))
+                payload = get_transactions_payload(
+                    tenant_id,
+                    limit=int(self.get_query_argument("limit", "50")),
+                    date_from=self.get_query_argument("from", None),
+                    date_to=self.get_query_argument("to", None),
+                )
             elif endpoint == "debts":
                 payload = get_debts_payload(tenant_id)
             elif endpoint == "pending-movements":
