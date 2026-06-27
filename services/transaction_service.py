@@ -1,4 +1,12 @@
-from airtable_handler import _leer_records_cacheados, _valor_campo, parsear_fecha, parsear_numero, trans_ws
+from airtable_handler import _leer_records_cacheados, _valor_campo, get_now, parsear_fecha, parsear_numero, trans_ws
+
+
+def _filter_datetime(value):
+    if not value:
+        return None
+    if value.tzinfo:
+        return value.astimezone(get_now().tzinfo).replace(tzinfo=None)
+    return value
 
 
 def _transaction_to_payload(row):
@@ -22,8 +30,8 @@ def _transaction_to_payload(row):
 def get_mobile_transactions(tenant_id, limit=50, date_from=None, date_to=None):
     limit = max(1, min(int(limit or 50), 200))
     rows = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
-    from_dt = parsear_fecha(date_from) if date_from else None
-    to_dt = parsear_fecha(date_to) if date_to else None
+    from_dt = _filter_datetime(parsear_fecha(date_from)) if date_from else None
+    to_dt = _filter_datetime(parsear_fecha(date_to)) if date_to else None
 
     if date_from and not from_dt:
         raise ValueError("from invalido. Usa YYYY-MM-DD o DD/MM/AAAA.")
@@ -33,7 +41,7 @@ def get_mobile_transactions(tenant_id, limit=50, date_from=None, date_to=None):
     if from_dt or to_dt:
         filtered = []
         for row in rows:
-            fecha = parsear_fecha(row.get("Fecha", ""))
+            fecha = _filter_datetime(parsear_fecha(row.get("Fecha", "")))
             if not fecha:
                 continue
             if from_dt and fecha < from_dt:
