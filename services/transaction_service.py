@@ -19,9 +19,29 @@ def _transaction_to_payload(row):
     }
 
 
-def get_mobile_transactions(tenant_id, limit=50):
+def get_mobile_transactions(tenant_id, limit=50, date_from=None, date_to=None):
     limit = max(1, min(int(limit or 50), 200))
     rows = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
+    from_dt = parsear_fecha(date_from) if date_from else None
+    to_dt = parsear_fecha(date_to) if date_to else None
+
+    if date_from and not from_dt:
+        raise ValueError("from invalido. Usa YYYY-MM-DD o DD/MM/AAAA.")
+    if date_to and not to_dt:
+        raise ValueError("to invalido. Usa YYYY-MM-DD o DD/MM/AAAA.")
+
+    if from_dt or to_dt:
+        filtered = []
+        for row in rows:
+            fecha = parsear_fecha(row.get("Fecha", ""))
+            if not fecha:
+                continue
+            if from_dt and fecha < from_dt:
+                continue
+            if to_dt and fecha >= to_dt:
+                continue
+            filtered.append(row)
+        rows = filtered
 
     def sort_key(row):
         fecha = parsear_fecha(row.get("Fecha", ""))
