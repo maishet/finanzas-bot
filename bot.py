@@ -41,11 +41,13 @@ from voice_interpreter import interpretar_transcripcion, validar_payload
 from api.auth_service import request_login_code, verify_login_code
 from api.mobile_service import (
     confirm_pending_movement_action,
+    create_category_action,
     create_snapshot_action,
     create_transaction_action,
     delete_transaction_action,
     discard_pending_movement_action,
     get_accounts_payload,
+    get_categories_payload,
     get_debts_payload,
     get_me_payload,
     get_pending_movements_payload,
@@ -322,6 +324,8 @@ class MobileAPIHandler(tornado.web.RequestHandler):
                 payload = get_me_payload(tenant_id)
             elif endpoint == "accounts":
                 payload = get_accounts_payload(tenant_id)
+            elif endpoint == "categories":
+                payload = get_categories_payload(tenant_id, tipo=self.get_query_argument("tipo", None))
             elif endpoint == "summary":
                 payload = get_summary_payload(tenant_id)
             elif endpoint == "transactions":
@@ -350,11 +354,18 @@ class MobileAPIHandler(tornado.web.RequestHandler):
     def post(self, endpoint):
         try:
             endpoint = str(endpoint or "").strip()
+            if endpoint == "transactions":
+                tenant_id = self._tenant_id()
+                payload = create_transaction_action(tenant_id, self._json_body())
+                self._write_payload(200, {"ok": True, "data": payload})
+                return
+            if endpoint == "categories":
+                tenant_id = self._tenant_id()
+                payload = create_category_action(tenant_id, self._json_body())
+                self._write_payload(200, {"ok": True, "data": payload})
+                return
             if endpoint != "transactions":
                 raise MobileAPIError(404, "Endpoint no encontrado.", "not_found")
-            tenant_id = self._tenant_id()
-            payload = create_transaction_action(tenant_id, self._json_body())
-            self._write_payload(200, {"ok": True, "data": payload})
         except TenantContextError as exc:
             self._write_payload(403, {"ok": False, "error": "tenant_access_denied", "message": str(exc)})
         except MobileAPIError as exc:
@@ -520,7 +531,7 @@ class RenderWebhookApp(tornado.web.Application):
             (r"/", HealthHandler),
             (r"/healthz/?", HealthHandler),
             (r"/api/auth/(request-code|verify-code)/?", MobileAuthAPIHandler),
-            (r"/api/(version|me|accounts|summary|transactions|debts|pending-movements)/?", MobileAPIHandler),
+            (r"/api/(version|me|accounts|categories|summary|transactions|debts|pending-movements)/?", MobileAPIHandler),
             (r"/api/(transactions|debts|pending-movements|snapshots)(?:/([^/]+))?(?:/([^/]+))?/?", MobileActionAPIHandler),
             (rf"{webhook_path}/?", TelegramHandler, shared_objects),
             (r"/gmail/push/?", GmailPushHandler, shared_objects),
