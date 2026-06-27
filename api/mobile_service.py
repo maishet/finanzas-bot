@@ -7,8 +7,10 @@ from services.mobile_action_service import (
     pay_debt,
     update_transaction,
 )
+from services.category_service import create_mobile_category
 from services.mobile_read_service import (
     get_accounts,
+    get_categories,
     get_debts,
     get_me,
     get_pending_movements,
@@ -30,6 +32,10 @@ def get_accounts_payload(tenant_id):
     return get_accounts(tenant_id)
 
 
+def get_categories_payload(tenant_id, tipo=None):
+    return get_categories(tenant_id, tipo=tipo)
+
+
 def get_summary_payload(tenant_id):
     return get_summary(tenant_id)
 
@@ -48,6 +54,10 @@ def get_pending_movements_payload(tenant_id, limit=50):
 
 def create_transaction_action(tenant_id, payload):
     return create_transaction(tenant_id, payload)
+
+
+def create_category_action(tenant_id, payload):
+    return create_mobile_category(tenant_id, payload)
 
 
 def update_transaction_action(tenant_id, trans_id, payload):
