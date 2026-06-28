@@ -343,6 +343,30 @@ Ruta futura:
 6. Refresh tokens.
 7. Roles mas finos por tenant.
 
+## Push Notifications Futuras
+
+Decision: no usar push notifications para feedback inmediato dentro de la app. Las acciones que el usuario ejecuta mirando la pantalla deben usar toast in-app temporal: movimiento creado, pendiente confirmado, pago registrado o error al guardar.
+
+Push notifications se evaluaran despues de estabilizar servicios, jobs y migracion progresiva de almacenamiento. Deben usarse para eventos asincronicos o externos al usuario:
+
+- Movimientos detectados desde Gmail, Outlook u otras fuentes.
+- Pendientes importantes por revisar.
+- Alertas de deuda por vencer.
+- Alertas de pago vencido.
+- Gasto inusual o comportamiento fuera de patron.
+- Resumen semanal o mensual.
+- Fallos de sincronizacion de fuentes conectadas.
+- Eventos de seguridad como nuevo login.
+
+Requisitos antes de implementarlas:
+
+- Solicitud explicita de permisos al usuario.
+- Registro de token push por dispositivo.
+- Endpoint backend para registrar y revocar dispositivos.
+- Jobs o workers para disparar notificaciones.
+- Politica anti-spam por tenant y tipo de alerta.
+- Soporte Android/iOS con Expo Notifications, FCM/APNs o equivalente.
+
 ## Render
 
 Render Free se mantiene.

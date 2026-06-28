@@ -27,8 +27,9 @@ def _transaction_to_payload(row):
     }
 
 
-def get_mobile_transactions(tenant_id, limit=50, date_from=None, date_to=None):
+def get_mobile_transactions(tenant_id, limit=50, offset=0, date_from=None, date_to=None):
     limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
     rows = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
     from_dt = _filter_datetime(parsear_fecha(date_from)) if date_from else None
     to_dt = _filter_datetime(parsear_fecha(date_to)) if date_to else None
@@ -58,4 +59,4 @@ def get_mobile_transactions(tenant_id, limit=50, date_from=None, date_to=None):
         return fecha.timestamp()
 
     rows = sorted(rows, key=sort_key, reverse=True)
-    return [_transaction_to_payload(row) for row in rows[:limit]]
+    return [_transaction_to_payload(row) for row in rows[offset : offset + limit]]
