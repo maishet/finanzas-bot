@@ -71,8 +71,8 @@ def get_summary(tenant_id):
     return get_mobile_summary(tenant_id)
 
 
-def get_transactions(tenant_id, limit=50, date_from=None, date_to=None):
-    return get_mobile_transactions(tenant_id, limit=limit, date_from=date_from, date_to=date_to)
+def get_transactions(tenant_id, limit=50, offset=0, date_from=None, date_to=None):
+    return get_mobile_transactions(tenant_id, limit=limit, offset=offset, date_from=date_from, date_to=date_to)
 
 
 def get_debts(tenant_id):
