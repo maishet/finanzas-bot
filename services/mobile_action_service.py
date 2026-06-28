@@ -1,5 +1,5 @@
-from airtable_handler import parsear_numero
 from repositories import default_finance_repository
+from utils.finance_format import parse_number
 
 
 def create_transaction(tenant_id, payload, repository=None):
@@ -7,7 +7,7 @@ def create_transaction(tenant_id, payload, repository=None):
     payload = payload or {}
     trans_id = repository.create_transaction(tenant_id, {
         "tipo": str(payload.get("tipo", "")).strip(),
-        "monto": parsear_numero(payload.get("monto", 0)),
+        "monto": parse_number(payload.get("monto", 0)),
         "moneda": str(payload.get("moneda", "PEN")).strip().upper() or "PEN",
         "categoria_input": str(payload.get("categoria", "")).strip(),
         "subcategoria": str(payload.get("subcategoria", "")).strip(),
@@ -37,7 +37,7 @@ def pay_debt(tenant_id, debt_id, payload, repository=None):
     repository = repository or default_finance_repository
     payload = payload or {}
     return repository.pay_debt(tenant_id, debt_id, {
-        "monto": parsear_numero(payload.get("monto", 0)),
+        "monto": parse_number(payload.get("monto", 0)),
         "moneda_pago": str(payload.get("moneda", "PEN")).strip().upper() or "PEN",
         "cuenta_banco": str(payload.get("cuenta", "")).strip(),
         "nota": str(payload.get("nota", "")).strip(),

@@ -1,22 +1,15 @@
 from datetime import datetime
 
 import config
-from airtable_handler import parsear_numero
+from domain.finance_models import AccountRecord
 from repositories import default_finance_repository
+from utils.finance_format import parse_number
 
 
 def get_mobile_accounts(tenant_id, repository=None):
     repository = repository or default_finance_repository
     resumen = repository.get_accounts_summary(tenant_id)
-    accounts = []
-    for item in resumen.get("cuentas", []):
-        accounts.append({
-            "nombre": item.get("nombre", ""),
-            "tipo": item.get("tipo", ""),
-            "saldo": round(parsear_numero(item.get("saldo", 0)), 2),
-            "moneda": item.get("moneda", "PEN"),
-        })
-    return accounts
+    return [AccountRecord.from_legacy(item).to_mobile_payload() for item in resumen.get("cuentas", [])]
 
 
 def get_mobile_summary(tenant_id, repository=None):
@@ -25,23 +18,23 @@ def get_mobile_summary(tenant_id, repository=None):
     ahora = datetime.now()
     balance = repository.get_month_balance(ahora.month, ahora.year, tenant_id)
     deudas = repository.list_active_debts(tenant_id)
-    total_deuda_pendiente = round(sum(parsear_numero(d.get("pendiente", 0)) for d in deudas), 2)
+    total_deuda_pendiente = round(sum(parse_number(d.get("pendiente", 0)) for d in deudas), 2)
 
     return {
         "tenant_id": tenant_id,
         "base_currency": config.BASE_CURRENCY,
         "accounts": {
-            "total_activos": round(parsear_numero(resumen.get("total_activos", 0)), 2),
-            "total_pasivos": round(parsear_numero(resumen.get("total_pasivos", 0)), 2),
-            "patrimonio": round(parsear_numero(resumen.get("patrimonio", 0)), 2),
+            "total_activos": round(parse_number(resumen.get("total_activos", 0)), 2),
+            "total_pasivos": round(parse_number(resumen.get("total_pasivos", 0)), 2),
+            "patrimonio": round(parse_number(resumen.get("patrimonio", 0)), 2),
             "count": len(resumen.get("cuentas", [])),
         },
         "month": {
             "mes": balance.get("mes"),
             "anio": balance.get("año"),
-            "ingresos": round(parsear_numero(balance.get("ingresos", 0)), 2),
-            "gastos": round(parsear_numero(balance.get("gastos", 0)), 2),
-            "ahorro": round(parsear_numero(balance.get("ahorro", 0)), 2),
+            "ingresos": round(parse_number(balance.get("ingresos", 0)), 2),
+            "gastos": round(parse_number(balance.get("gastos", 0)), 2),
+            "ahorro": round(parse_number(balance.get("ahorro", 0)), 2),
         },
         "debts": {
             "active_count": len(deudas),

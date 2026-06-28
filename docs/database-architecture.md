@@ -235,3 +235,11 @@ api handlers
 ```
 
 The current Python phase introduces the boundary incrementally. The future TypeScript backend should keep the same separation with typed schemas and database migrations.
+
+## Phase 6 Implementation Status
+
+- `repositories/` contains the persistence boundary and the current Airtable adapter.
+- `domain/finance_models.py` contains normalized internal records with English field names and enum values.
+- `utils/finance_format.py` contains reusable parsing/normalization helpers independent from Airtable.
+- Mobile API payloads remain backward-compatible while services map internal normalized records to current response shapes.
+- Direct repository tests cover idempotent category creation and adapter delegation.

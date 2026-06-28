@@ -1,13 +1,12 @@
 from datetime import datetime
-from zoneinfo import ZoneInfo
 import os
 import calendar
-import unicodedata
 import re
 import config
 import logging
 
 from airtable_backend import api as airtable_api, sheet, WorksheetNotFound
+from utils.finance_format import get_field, get_now as _get_now, normalize_text, now_str as _now_str, parse_date, parse_number
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -304,56 +303,10 @@ def _leer_registros_formateado(nombre_hoja):
 
 # ---------- FUNCIONES DE NORMALIZACIÓN ----------
 def normalizar_texto(texto):
-    """
-    Elimina tildes, convierte a minúsculas y quita caracteres especiales.
-    Ej: 'Alimentación' -> 'alimentacion'
-    """
-    if not texto:
-        return ""
-    texto = texto.lower().strip()
-    # Descomponer caracteres unicode (NFD) y eliminar marcas diacríticas
-    texto = unicodedata.normalize('NFD', texto)
-    texto = texto.encode('ascii', 'ignore').decode('utf-8')
-    return texto
+    return normalize_text(texto)
 
 def parsear_numero(valor):
-    """Convierte valores tipo '1.314,13' o '1314.13' a float."""
-    if isinstance(valor, (int, float)):
-        return float(valor)
-
-    txt = str(valor or "").strip().replace(" ", "")
-    if not txt:
-        return 0.0
-
-    # Mantener solo dígitos y separadores comunes.
-    txt = re.sub(r"[^0-9,.-]", "", txt)
-    if not txt or txt in ["-", ".", ","]:
-        return 0.0
-
-    # Caso con ambos separadores.
-    if "," in txt and "." in txt:
-        if txt.rfind(",") > txt.rfind("."):
-            # Formato latam: 1.234,56
-            txt = txt.replace(".", "").replace(",", ".")
-        else:
-            # Formato en-US: 1,234.56
-            txt = txt.replace(",", "")
-    elif "," in txt:
-        # Solo coma: decimal o miles
-        if re.fullmatch(r"-?\d{1,3}(,\d{3})+", txt):
-            txt = txt.replace(",", "")
-        else:
-            txt = txt.replace(",", ".")
-    elif "." in txt:
-        # Solo punto: decimal o miles (latam formateado)
-        if re.fullmatch(r"-?\d{1,3}(\.\d{3})+", txt):
-            txt = txt.replace(".", "")
-
-    try:
-        return float(txt)
-    except ValueError:
-        logger.warning(f"No se pudo parsear número '{valor}'. Se usará 0.0")
-        return 0.0
+    return parse_number(valor)
 
 
 def _get_tz_name():
@@ -365,52 +318,14 @@ def _get_tz_name():
 
 
 def get_now(tz_name=None):
-    """Devuelve datetime.now() con la zona horaria configurada (IANA)."""
-    name = tz_name or _get_tz_name() or "America/Lima"
-    try:
-        tz = ZoneInfo(name)
-    except Exception:
-        tz = ZoneInfo("UTC")
-    return datetime.now(tz)
+    return _get_now(tz_name)
 
 
 def now_str(fmt="%Y-%m-%d %H:%M:%S", tz_name=None):
-    return get_now(tz_name).strftime(fmt)
+    return _now_str(fmt, tz_name)
 
 def parsear_fecha(valor):
-    """Intenta parsear fechas en formatos frecuentes de la hoja/Airtable."""
-    if isinstance(valor, datetime):
-        return valor
-
-    txt = str(valor or "").strip()
-    if not txt:
-        return None
-
-    # 1) ISO 8601 (Airtable DateTime suele devolver algo como 2026-05-25T14:30:00.000Z)
-    try:
-        iso_txt = txt.replace("Z", "+00:00")
-        return datetime.fromisoformat(iso_txt)
-    except Exception:
-        pass
-
-    # 2) Formatos legacy/manuales
-    formatos = [
-        "%d/%m/%Y",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%Y %H:%M:%S",
-        "%Y-%m-%d",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S.%f",
-        "%d-%m-%Y",
-    ]
-    for fmt in formatos:
-        try:
-            return datetime.strptime(txt, fmt)
-        except ValueError:
-            continue
-    return None
+    return parse_date(valor)
 
 
 def avanzar_un_mes(fecha_base):
@@ -2501,10 +2416,7 @@ def obtener_recordatorios_deudas(dias_alerta=3, fecha_referencia=None, tenant_id
     return recordatorios
 
 def _valor_campo(registro, *keys, default=""):
-    for key in keys:
-        if key in registro:
-            return registro.get(key)
-    return default
+    return get_field(registro, *keys, default=default)
 
 
 def _siguiente_id_snapshot(tenant_id=None):

@@ -1,9 +1,9 @@
-from airtable_handler import normalizar_texto
 from repositories import default_finance_repository
+from utils.finance_format import normalize_text
 
 
 def _category_icon(nombre):
-    norm = normalizar_texto(nombre)
+    norm = normalize_text(nombre)
     if any(token in norm for token in ["aliment", "comida", "supermerc"]):
         return "restaurant-outline"
     if any(token in norm for token in ["transport", "taxi", "uber"]):
@@ -31,7 +31,7 @@ def get_mobile_categories(tenant_id, tipo=None, repository=None):
             "subcategorias": item.get("subcategorias", ""),
             "icono": _category_icon(item["original"]),
         }
-        for item in sorted(categories, key=lambda row: normalizar_texto(row["original"]))
+        for item in sorted(categories, key=lambda row: normalize_text(row["original"]))
     ]
 
 

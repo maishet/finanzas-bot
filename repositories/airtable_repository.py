@@ -12,7 +12,6 @@ from airtable_handler import (
     eliminar_transaccion,
     generar_snapshot_saldos,
     listar_movimientos_pendientes,
-    normalizar_texto,
     obtener_balance_mes,
     obtener_categorias,
     obtener_deudas_activas,
@@ -20,6 +19,7 @@ from airtable_handler import (
     pagar_deuda,
     trans_ws,
 )
+from utils.finance_format import normalize_text
 
 
 class AirtableFinanceRepository:
@@ -40,9 +40,9 @@ class AirtableFinanceRepository:
 
     def create_category_if_missing(self, tenant_id: str, name: str, category_type: str, subcategories: str = "") -> dict[str, Any]:
         existing = _leer_records_cacheados(categorias_ws, "categorias_records", tenant_id=tenant_id)
-        key = (normalizar_texto(name), normalizar_texto(category_type))
+        key = (normalize_text(name), normalize_text(category_type))
         for row in existing:
-            if (normalizar_texto(row.get("Nombre", "")), normalizar_texto(row.get("Tipo", ""))) == key:
+            if (normalize_text(row.get("Nombre", "")), normalize_text(row.get("Tipo", ""))) == key:
                 return {"nombre": str(row.get("Nombre", name)).strip(), "tipo": str(row.get("Tipo", category_type)).strip(), "created": False}
 
         categorias_ws.append_row(_row_with_tenant(categorias_ws, [name, category_type, subcategories], tenant_id), value_input_option="RAW")

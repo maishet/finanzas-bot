@@ -234,6 +234,12 @@ repositories/
 ├── interfaces.py
 ├── airtable_repository.py
 └── future_supabase_repository.py
+
+domain/
+└── finance_models.py
+
+utils/
+└── finance_format.py
 ```
 
 Reglas:
@@ -246,6 +252,8 @@ Reglas:
 - Tablas, columnas y valores normalizados internos deben estar en ingles y `snake_case`.
 - La API movil puede mantener payloads actuales temporalmente, pero repositories y migracion futura deben mapear hacia entidades normalizadas en ingles.
 - Categorias usadas no se borran fisicamente; se ocultaran con `is_active = false` en el modelo relacional.
+- Utilidades neutrales de formato/fechas/numeros viven fuera de `airtable_handler`.
+- Los services pueden convertir entidades internas normalizadas a payloads legacy/mobile hasta completar la migracion de contratos.
 
 ## Fase 7: Supabase/Postgres
 
