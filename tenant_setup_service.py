@@ -12,14 +12,13 @@ TEMPLATE_PATH = Path(__file__).resolve().parent / "airtable_template" / "finance
 ACCOUNT_TYPES = {
     "efectivo": "Efectivo",
     "banco": "Banco",
-    "credito": "Crédito",
+    "crédito": "Crédito",
     "crédito": "Crédito",
     "debito": "Debito",
     "débito": "Debito",
 }
 
 DEBT_TYPES = {
-    "credito": "Crédito",
     "crédito": "Crédito",
     "servicio": "Servicio",
 }

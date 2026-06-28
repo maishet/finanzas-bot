@@ -910,7 +910,7 @@ async def configurar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def metodo_por_tipo_cuenta(tipo_cuenta):
     tipo_norm = (tipo_cuenta or "").strip().lower()
-    if tipo_norm in ["credito", "crédito", "debito", "débito"]:
+    if tipo_norm in ["crédito", "crédito", "debito", "débito"]:
         return "Tarjeta de crédito"
     if tipo_norm == "banco":
         return "Transferencia"
