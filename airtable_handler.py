@@ -1527,7 +1527,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
     set_if_present("MontoTotal", 0.00)
     set_if_present("Moneda", moneda.upper())
     set_if_present("MontoPagado", 0.00)
-    set_if_present("FechaVencimiento", fecha_venc.strftime("%Y-%m-%d") if fecha_venc else "")
+    set_if_present("FechaVencimiento", fecha_venc.strftime("%Y-%m-%d") if fecha_venc else None)
     set_if_present("Estado", "Activa")
     set_if_present("CuentaAsociada", nombre_cuenta)
     set_if_present("Periodo", periodo)
@@ -1579,7 +1579,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
             # intentar derivar periodo desde hoy y dia de corte de la cuenta
             dia_corte = _obtener_dia_corte_de_cuenta(d.get("CuentaAsociada", ""), tenant_id=tenant_id)
             periodo = _obtener_periodo_por_fecha(get_now(), dia_corte)
-            fecha_corte_str = ""
+            fecha_corte_str = None
 
         if col_periodo:
             deudas_ws.update_cell(row, col_periodo, periodo)
@@ -2191,7 +2191,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
             periodo_nuevo = fecha_venc_nueva.strftime("%Y-%m") if fecha_venc_nueva else ""
             fecha_corte_prev = parsear_fecha(deuda.get("FechaCorte"))
             fecha_corte_nueva = avanzar_un_mes(fecha_corte_prev) if fecha_corte_prev else None
-            fecha_corte_nueva_iso = fecha_corte_nueva.strftime("%Y-%m-%d") if fecha_corte_nueva else ""
+            fecha_corte_nueva_iso = fecha_corte_nueva.strftime("%Y-%m-%d") if fecha_corte_nueva else None
 
             logger.info(
                 "Crear nueva deuda recurrente | nueva_deuda_id=%s monto=%.2f moneda=%s cuenta_asociada=%s",
@@ -2216,7 +2216,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
             if "Periodo" in headers:
                 payload["Periodo"] = periodo_nuevo or deuda.get("Periodo", "")
             if "FechaCorte" in headers:
-                payload["FechaCorte"] = fecha_corte_nueva_iso or deuda.get("FechaCorte", "")
+                payload["FechaCorte"] = fecha_corte_nueva_iso if fecha_corte_nueva_iso else None
 
             try:
                 airtable_api.create_record("Deudas", _fields_with_tenant(deudas_ws, payload, tenant_id))
