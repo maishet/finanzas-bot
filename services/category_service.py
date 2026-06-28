@@ -22,7 +22,7 @@ def _category_icon(nombre):
         return "medical-outline"
     if any(token in norm for token in ["sueldo", "salario"]):
         return "briefcase-outline"
-    if any(token in norm for token in ["deuda", "credito", "tarjeta"]):
+    if any(token in norm for token in ["deuda", "crédito", "tarjeta"]):
         return "card-outline"
     return "apps-outline"
 

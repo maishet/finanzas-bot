@@ -139,7 +139,7 @@ DEFAULT_FIELD_DEFS = {
         _text("TenantID"),
         _text("ID"),
         _text("Descripcion"),
-        _single_select("Tipo", ["Credito", "Crédito", "Servicio"]),
+        _single_select("Tipo", ["Crédito", "Servicio"]),
         _number("MontoTotal"),
         _single_select("Moneda", ["PEN", "USD"]),
         _number("MontoPagado"),

@@ -494,7 +494,7 @@ def convertir_a_pen(monto, moneda):
 
 def _metodo_por_cuenta(nombre_cuenta, tenant_id=None):
     tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta, tenant_id=tenant_id) or "")
-    if tipo in ["credito", "debito"]:
+    if tipo in ["crédito", "debito"]:
         return "Tarjeta de crédito"
     if tipo == "banco":
         return "Transferencia"
@@ -527,7 +527,7 @@ def _metodo_compatible_airtable(metodo):
 
     # Sinónimos útiles
     candidatos = []
-    if metodo_norm in ["tarjeta de credito", "tarjeta de debito", "efectivo"]:
+    if metodo_norm in ["tarjeta de crédito", "tarjeta de debito", "efectivo"]:
         candidatos = ["Tarjeta de crédito", "Transferencia", "Efectivo"]
     elif metodo_norm == "transferencia":
         candidatos = ["Transferencia"]
@@ -1318,7 +1318,7 @@ def obtener_tipo_cuenta(nombre_input, tenant_id=None):
 
 def es_cuenta_credito(nombre_cuenta, tenant_id=None):
     tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta, tenant_id=tenant_id) or "")
-    return tipo == "credito"
+    return tipo == "crédito"
 
 def es_cuenta_banco(nombre_cuenta, tenant_id=None):
     tipo = normalizar_texto(obtener_tipo_cuenta(nombre_cuenta, tenant_id=tenant_id) or "")
@@ -1423,7 +1423,7 @@ def obtener_deuda_activa_por_cuenta(nombre_cuenta, fecha_transaccion=None, tenan
         tipo = normalizar_texto(d.get("Tipo", ""))
         estado = normalizar_texto(d.get("Estado", ""))
         cuenta_asociada = normalizar_texto(d.get("CuentaAsociada", ""))
-        if tipo != "credito":
+        if tipo != "crédito":
             continue
         if cuenta_asociada != cuenta_norm:
             continue
@@ -1503,7 +1503,7 @@ def _buscar_deuda_por_periodo(nombre_cuenta, periodo, tenant_id=None):
     return None
 
 
-def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None, tipo="credito", moneda="PEN", tenant_id=None):
+def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None, tipo="crédito", moneda="PEN", tenant_id=None):
     """Crea una nueva fila en Deudas para el periodo indicado con montos iniciales 0."""
     next_id = _siguiente_id_deuda(tenant_id=tenant_id)
     deuda_id = str(next_id)
@@ -1595,7 +1595,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
     created = 0
     for c in cuentas:
         tipo = normalizar_texto(c.get("Tipo", ""))
-        if tipo != "credito":
+        if tipo != "crédito":
             continue
         nombre = c.get("Nombre")
         dia_corte = _obtener_dia_corte_de_cuenta(nombre, tenant_id=tenant_id)
@@ -1613,7 +1613,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
                         fecha_venc = datetime(año, mes, min(dp, 28))
                     except Exception:
                         fecha_venc = None
-            crear_deuda_ciclo(nombre, periodo_actual, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda=c.get("Moneda", "PEN"), tenant_id=tenant_id)
+            crear_deuda_ciclo(nombre, periodo_actual, fecha_venc=fecha_venc, descripcion=None, tipo="crédito", moneda=c.get("Moneda", "PEN"), tenant_id=tenant_id)
             created += 1
 
     logger.info("Migración: creados %d ciclos vacíos para periodo actual", created)
@@ -1647,7 +1647,7 @@ def incrementar_deuda_por_gasto(nombre_cuenta, monto, moneda, fecha_transaccion=
                         fecha_venc = datetime(año, mes, min(dp, 28))
                     except Exception:
                         fecha_venc = None
-        nueva_id = crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=fecha_venc, descripcion=None, tipo="credito", moneda="PEN", tenant_id=tenant_id)
+        nueva_id = crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=fecha_venc, descripcion=None, tipo="crédito", moneda="PEN", tenant_id=tenant_id)
         # Refrescar cache y obtener la deuda recién creada
         _cache_invalidate("deudas_records")
         deuda = _buscar_deuda_por_periodo(nombre_cuenta, periodo, tenant_id=tenant_id)
@@ -1953,7 +1953,7 @@ def actualizar_saldo_cuenta(nombre_cuenta, tipo_transaccion, monto_pen, tenant_i
     # En cuentas de crédito el saldo representa deuda pendiente:
     # - gasto => sube la deuda
     # - ingreso => baja la deuda
-    if tipo_cuenta == "credito":
+    if tipo_cuenta == "crédito":
         if tipo_norm == "ingreso":
             nuevo_saldo = saldo_actual - monto_pen
         elif tipo_norm == "gasto":
@@ -2153,7 +2153,7 @@ def pagar_deuda(deuda_id, monto, moneda_pago, cuenta_banco, nota="", tenant_id=N
         # Solo ajustar la cuenta asociada cuando sea línea de deuda (crédito/débito).
         # Si la deuda está asociada a una cuenta Banco, ese ajuste se anula con el gasto
         # posterior y deja el saldo igual (ingreso + gasto sobre la misma cuenta).
-        if tipo_cuenta_asociada in {"credito", "debito"}:
+        if tipo_cuenta_asociada in {"crédito", "debito"}:
             actualizar_saldo_cuenta(cuenta_asociada, "ingreso", pago_en_pen, tenant_id=tenant_id)
         else:
             logger.info(
@@ -2298,7 +2298,7 @@ def obtener_resumen_cuentas(tenant_id=None):
         tipo = normalizar_texto(c.get("Tipo", ""))
         if tipo in ["efectivo", "banco", "ahorro"]:
             total_activos += saldo
-        elif tipo == "credito":
+        elif tipo == "crédito":
             total_pasivos += saldo
         resumen.append({
             "nombre": c["Nombre"],
@@ -2593,7 +2593,7 @@ def obtener_datos_reporte_mensual(mes=None, año=None, tenant_id=None):
             "uso_cuentas": {},
             "segmentos": {
                 "banco": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
-                "credito": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
+                "crédito": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
             },
             "movimientos": [],
         }
@@ -2673,15 +2673,15 @@ def obtener_datos_reporte_mensual(mes=None, año=None, tenant_id=None):
     # Segmentación por tipo de cuenta
     segmentos = {
         "banco": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
-        "credito": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
+        "crédito": {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0},
     }
-    segmentos_detalle = {"banco": {}, "credito": {}}
+    segmentos_detalle = {"banco": {}, "crédito": {}}
     for m in movimientos:
         tipo_cuenta = cuenta_tipo_map.get(normalizar_texto(m.get("cuenta", "")), "")
         if tipo_cuenta == "banco":
             grupo = "banco"
-        elif tipo_cuenta in {"credito", "debito"}:
-            grupo = "credito"
+        elif tipo_cuenta in {"crédito", "debito"}:
+            grupo = "crédito"
         else:
             continue
 
