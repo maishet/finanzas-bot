@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock
 
 from services.mobile_action_service import (
     confirm_pending_movement,
@@ -14,12 +14,13 @@ from services.mobile_action_service import (
 
 class MobileActionServiceTests(unittest.TestCase):
     def test_create_transaction_action_delegates_to_business_logic(self):
-        with patch("services.mobile_action_service.add_transaction", return_value="TX00099") as add_transaction:
-            result = create_transaction("TEN_TEST", {"tipo": "Gasto", "monto": 12.5, "categoria": "Comida"})
+        repository = Mock()
+        repository.create_transaction.return_value = "TX00099"
+        result = create_transaction("TEN_TEST", {"tipo": "Gasto", "monto": 12.5, "categoria": "Comida"}, repository=repository)
 
         self.assertEqual(result, {"id": "TX00099"})
-        add_transaction.assert_called_once()
-        self.assertEqual(add_transaction.call_args.kwargs["tenant_id"], "TEN_TEST")
+        repository.create_transaction.assert_called_once()
+        self.assertEqual(repository.create_transaction.call_args.args[0], "TEN_TEST")
 
     def test_update_transaction_action_requires_field(self):
         with self.assertRaises(ValueError):
@@ -27,51 +28,56 @@ class MobileActionServiceTests(unittest.TestCase):
 
     def test_update_transaction_action_delegates(self):
         expected = {"id": "TX00001", "campo": "nota"}
-        with patch("services.mobile_action_service.editar_transaccion", return_value=expected) as editar:
-            result = update_transaction("TEN_TEST", "TX00001", {"campo": "nota", "valor": "ok"})
+        repository = Mock()
+        repository.update_transaction.return_value = expected
+        result = update_transaction("TEN_TEST", "TX00001", {"campo": "nota", "valor": "ok"}, repository=repository)
 
         self.assertEqual(result, expected)
-        editar.assert_called_once_with("TX00001", "nota", "ok", tenant_id="TEN_TEST")
+        repository.update_transaction.assert_called_once_with("TEN_TEST", "TX00001", "nota", "ok")
 
     def test_delete_transaction_action_delegates(self):
         expected = {"id": "TX00001"}
-        with patch("services.mobile_action_service.eliminar_transaccion", return_value=expected) as eliminar:
-            result = delete_transaction("TEN_TEST", "TX00001")
+        repository = Mock()
+        repository.delete_transaction.return_value = expected
+        result = delete_transaction("TEN_TEST", "TX00001", repository=repository)
 
         self.assertEqual(result, expected)
-        eliminar.assert_called_once_with("TX00001", tenant_id="TEN_TEST")
+        repository.delete_transaction.assert_called_once_with("TEN_TEST", "TX00001")
 
     def test_pay_debt_action_delegates(self):
         expected = {"deuda_id": "D00001", "trans_id": "TX00002"}
-        with patch("services.mobile_action_service.pagar_deuda", return_value=expected) as pagar:
-            result = pay_debt("TEN_TEST", "D00001", {"monto": 50, "moneda": "PEN", "cuenta": "BCP"})
+        repository = Mock()
+        repository.pay_debt.return_value = expected
+        result = pay_debt("TEN_TEST", "D00001", {"monto": 50, "moneda": "PEN", "cuenta": "BCP"}, repository=repository)
 
         self.assertEqual(result, expected)
-        pagar.assert_called_once()
-        self.assertEqual(pagar.call_args.kwargs["tenant_id"], "TEN_TEST")
+        repository.pay_debt.assert_called_once()
+        self.assertEqual(repository.pay_debt.call_args.args[0], "TEN_TEST")
 
     def test_confirm_pending_requires_category(self):
         with self.assertRaises(ValueError):
             confirm_pending_movement("TEN_TEST", "PM00001", {})
 
     def test_confirm_and_discard_pending_delegate(self):
-        with patch("services.mobile_action_service.confirmar_movimiento_pendiente", return_value={"tx_id": "TX00003"}) as confirmar:
-            confirm_result = confirm_pending_movement("TEN_TEST", "PM00001", {"categoria": "Transporte", "nota": "taxi"})
-        with patch("services.mobile_action_service.descartar_movimiento_pendiente", return_value={"pendiente_id": "PM00002"}) as descartar:
-            discard_result = discard_pending_movement("TEN_TEST", "PM00002", {"motivo": "duplicado"})
+        repository = Mock()
+        repository.confirm_pending_movement.return_value = {"tx_id": "TX00003"}
+        repository.discard_pending_movement.return_value = {"pendiente_id": "PM00002"}
+        confirm_result = confirm_pending_movement("TEN_TEST", "PM00001", {"categoria": "Transporte", "nota": "taxi"}, repository=repository)
+        discard_result = discard_pending_movement("TEN_TEST", "PM00002", {"motivo": "duplicado"}, repository=repository)
 
         self.assertEqual(confirm_result, {"tx_id": "TX00003"})
         self.assertEqual(discard_result, {"pendiente_id": "PM00002"})
-        confirmar.assert_called_once_with("PM00001", "Transporte", nota_extra="taxi", tenant_id="TEN_TEST")
-        descartar.assert_called_once_with("PM00002", motivo="duplicado", tenant_id="TEN_TEST")
+        repository.confirm_pending_movement.assert_called_once_with("TEN_TEST", "PM00001", "Transporte", note="taxi")
+        repository.discard_pending_movement.assert_called_once_with("TEN_TEST", "PM00002", reason="duplicado")
 
     def test_create_snapshot_action_delegates(self):
         expected = {"snapshot_id": "SNAP00001"}
-        with patch("services.mobile_action_service.generar_snapshot_saldos", return_value=expected) as snapshot:
-            result = create_snapshot("TEN_TEST", {"origen": "Mobile"})
+        repository = Mock()
+        repository.create_snapshot.return_value = expected
+        result = create_snapshot("TEN_TEST", {"origen": "Mobile"}, repository=repository)
 
         self.assertEqual(result, expected)
-        snapshot.assert_called_once_with(origen="Mobile", fecha=None, tenant_id="TEN_TEST")
+        repository.create_snapshot.assert_called_once_with("TEN_TEST", origin="Mobile", date=None)
 
 
 if __name__ == "__main__":

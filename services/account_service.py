@@ -1,11 +1,13 @@
 from datetime import datetime
 
 import config
-from airtable_handler import obtener_balance_mes, obtener_deudas_activas, obtener_resumen_cuentas, parsear_numero
+from airtable_handler import parsear_numero
+from repositories import default_finance_repository
 
 
-def get_mobile_accounts(tenant_id):
-    resumen = obtener_resumen_cuentas(tenant_id=tenant_id)
+def get_mobile_accounts(tenant_id, repository=None):
+    repository = repository or default_finance_repository
+    resumen = repository.get_accounts_summary(tenant_id)
     accounts = []
     for item in resumen.get("cuentas", []):
         accounts.append({
@@ -17,11 +19,12 @@ def get_mobile_accounts(tenant_id):
     return accounts
 
 
-def get_mobile_summary(tenant_id):
-    resumen = obtener_resumen_cuentas(tenant_id=tenant_id)
+def get_mobile_summary(tenant_id, repository=None):
+    repository = repository or default_finance_repository
+    resumen = repository.get_accounts_summary(tenant_id)
     ahora = datetime.now()
-    balance = obtener_balance_mes(ahora.month, ahora.year, tenant_id=tenant_id)
-    deudas = obtener_deudas_activas(tenant_id=tenant_id)
+    balance = repository.get_month_balance(ahora.month, ahora.year, tenant_id)
+    deudas = repository.list_active_debts(tenant_id)
     total_deuda_pendiente = round(sum(parsear_numero(d.get("pendiente", 0)) for d in deudas), 2)
 
     return {

@@ -1,9 +1,11 @@
-from airtable_handler import obtener_deudas_activas, parsear_numero
+from airtable_handler import parsear_numero
+from repositories import default_finance_repository
 
 
-def get_mobile_debts(tenant_id):
+def get_mobile_debts(tenant_id, repository=None):
+    repository = repository or default_finance_repository
     debts = []
-    for item in obtener_deudas_activas(tenant_id=tenant_id):
+    for item in repository.list_active_debts(tenant_id):
         debts.append({
             "id": item.get("id", ""),
             "descripcion": item.get("descripcion", ""),

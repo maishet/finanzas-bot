@@ -1,9 +1,11 @@
-from airtable_handler import listar_movimientos_pendientes, parsear_numero
+from airtable_handler import parsear_numero
+from repositories import default_finance_repository
 
 
-def get_mobile_pending_movements(tenant_id, limit=50):
+def get_mobile_pending_movements(tenant_id, limit=50, repository=None):
+    repository = repository or default_finance_repository
     limit = max(1, min(int(limit or 50), 200))
-    rows = listar_movimientos_pendientes(limit=limit, include_resueltos=False, tenant_id=tenant_id)
+    rows = repository.list_pending_movements(tenant_id, limit=limit, include_resolved=False)
     payload = []
     for row in rows:
         payload.append({

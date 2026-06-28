@@ -1,4 +1,5 @@
-from airtable_handler import _leer_records_cacheados, _valor_campo, get_now, parsear_fecha, parsear_numero, trans_ws
+from airtable_handler import _valor_campo, get_now, parsear_fecha, parsear_numero
+from repositories import default_finance_repository
 
 
 def _filter_datetime(value):
@@ -27,10 +28,11 @@ def _transaction_to_payload(row):
     }
 
 
-def get_mobile_transactions(tenant_id, limit=50, offset=0, date_from=None, date_to=None):
+def get_mobile_transactions(tenant_id, limit=50, offset=0, date_from=None, date_to=None, repository=None):
+    repository = repository or default_finance_repository
     limit = max(1, min(int(limit or 50), 200))
     offset = max(0, int(offset or 0))
-    rows = _leer_records_cacheados(trans_ws, "transacciones_records", tenant_id=tenant_id)
+    rows = repository.list_transactions(tenant_id)
     from_dt = _filter_datetime(parsear_fecha(date_from)) if date_from else None
     to_dt = _filter_datetime(parsear_fecha(date_to)) if date_to else None
 

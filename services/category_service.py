@@ -1,11 +1,5 @@
-from airtable_handler import (
-    _cache_invalidate,
-    _leer_records_cacheados,
-    _row_with_tenant,
-    categorias_ws,
-    normalizar_texto,
-    obtener_categorias,
-)
+from airtable_handler import normalizar_texto
+from repositories import default_finance_repository
 
 
 def _category_icon(nombre):
@@ -27,8 +21,9 @@ def _category_icon(nombre):
     return "apps-outline"
 
 
-def get_mobile_categories(tenant_id, tipo=None):
-    categories = obtener_categorias(tipo, tenant_id=tenant_id)
+def get_mobile_categories(tenant_id, tipo=None, repository=None):
+    repository = repository or default_finance_repository
+    categories = repository.list_categories(tenant_id, category_type=tipo)
     return [
         {
             "nombre": item["original"],
@@ -40,7 +35,8 @@ def get_mobile_categories(tenant_id, tipo=None):
     ]
 
 
-def create_mobile_category(tenant_id, payload):
+def create_mobile_category(tenant_id, payload, repository=None):
+    repository = repository or default_finance_repository
     payload = payload or {}
     nombre = str(payload.get("nombre", "")).strip()
     tipo = str(payload.get("tipo", "Gasto")).strip().capitalize()
@@ -50,12 +46,4 @@ def create_mobile_category(tenant_id, payload):
     if tipo not in {"Gasto", "Ingreso"}:
         raise ValueError("tipo debe ser Gasto o Ingreso.")
 
-    existing = _leer_records_cacheados(categorias_ws, "categorias_records", tenant_id=tenant_id)
-    key = (normalizar_texto(nombre), normalizar_texto(tipo))
-    for row in existing:
-        if (normalizar_texto(row.get("Nombre", "")), normalizar_texto(row.get("Tipo", ""))) == key:
-            return {"nombre": str(row.get("Nombre", nombre)).strip(), "tipo": str(row.get("Tipo", tipo)).strip(), "created": False}
-
-    categorias_ws.append_row(_row_with_tenant(categorias_ws, [nombre, tipo, subcategorias], tenant_id), value_input_option="RAW")
-    _cache_invalidate("categorias_records")
-    return {"nombre": nombre, "tipo": tipo, "created": True}
+    return repository.create_category_if_missing(tenant_id, nombre, tipo, subcategories=subcategorias)
