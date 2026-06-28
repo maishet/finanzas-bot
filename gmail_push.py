@@ -258,7 +258,7 @@ def _detectar_tipo(texto):
         "transferencia enviada",
         "pago realizado",
         "pago de servicios",
-        "consumo tarjeta de credito",
+        "consumo tarjeta de crédito",
         "yape",
         "yapear",
     ]

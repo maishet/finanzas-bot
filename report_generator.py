@@ -571,7 +571,7 @@ def generar_reporte_mensual_pdf(datos):
     # Resumen por tipo de cuenta
     segmentos = datos.get("segmentos", {})
     banco = segmentos.get("banco", {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0})
-    credito = segmentos.get("credito", {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0})
+    crédito = segmentos.get("crédito", {"ingresos": 0.0, "gastos": 0.0, "ahorro": 0.0, "total_transacciones": 0})
 
     y_seg = y_txt - 0.15 * cm
     c.setFillColor(COLOR_PRIMARY)
@@ -582,7 +582,7 @@ def generar_reporte_mensual_pdf(datos):
     card_h = 2.35 * cm
     y_card = y_seg - card_h - 0.18 * cm
 
-    for i, (titulo, seg) in enumerate((("Banco", banco), ("Crédito", credito))):
+    for i, (titulo, seg) in enumerate((("Banco", banco), ("Crédito", crédito))):
         x_card = LEFT + i * (card_w + 0.6 * cm)
         estado_seg = _estado_desde_kpi(seg)
         c.setFillColor(colors.white)
@@ -609,7 +609,7 @@ def generar_reporte_mensual_pdf(datos):
 
     segmentos_detalle = datos.get("segmentos_detalle", {})
     banco_detalle = segmentos_detalle.get("banco", {})
-    credito_detalle = segmentos_detalle.get("credito", {})
+    credito_detalle = segmentos_detalle.get("crédito", {})
 
     uso_banco = {k: {"conteo": v.get("total_transacciones", 0), "monto_pen": v.get("gastos", 0)} for k, v in banco_detalle.items()}
     uso_credito = {k: {"conteo": v.get("total_transacciones", 0), "monto_pen": v.get("gastos", 0)} for k, v in credito_detalle.items()}
@@ -635,7 +635,7 @@ def generar_reporte_mensual_pdf(datos):
     _draw_title(c, "Comparativo entre cuentas", f"Generado: {datos['generado_en']}")
     segmentos_detalle = datos.get("segmentos_detalle", {})
     comparativo_items = []
-    for grupo_key, detalle in (("banco", segmentos_detalle.get("banco", {})), ("credito", segmentos_detalle.get("credito", {}))):
+    for grupo_key, detalle in (("banco", segmentos_detalle.get("banco", {})), ("crédito", segmentos_detalle.get("crédito", {}))):
         for cuenta, vals in detalle.items():
             comparativo_items.append({
                 "grupo": grupo_key,

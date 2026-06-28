@@ -102,7 +102,7 @@ Ese valor debe coincidir con `USER_ID` o `ADMIN_TELEGRAM_USER_ID` en el `.env`.
 | `ID` | Number, precision 0 |
 | `Nombre` | Single line text |
 | `NumeroCuenta` | Single line text |
-| `Tipo` | Single select: `Efectivo`, `Banco`, `Credito`, `Crédito`, `Debito` |
+| `Tipo` | Single select: `Efectivo`, `Banco`, `Crédito`, `Crédito`, `Debito` |
 | `Moneda` | Single select: `PEN`, `USD` |
 | `SaldoActual` | Number, precision 2 |
 | `LimiteCredito` / `LímiteCrédito` | Number, precision 2 |
@@ -131,7 +131,7 @@ Ese valor debe coincidir con `USER_ID` o `ADMIN_TELEGRAM_USER_ID` en el `.env`.
 | `Categoria` / `Categoría` | Single line text |
 | `Subcategoria` / `Subcategoría` | Single line text |
 | `Cuenta` | Single line text |
-| `Metodo` / `Método` | Single select: `Efectivo`, `Transferencia`, `Tarjeta de Crédito`, `Tarjeta de credito`, `Tarjeta de Débito` |
+| `Metodo` / `Método` | Single select: `Efectivo`, `Transferencia`, `Tarjeta de Crédito`, `Tarjeta de crédito`, `Tarjeta de Débito` |
 | `Nota` | Long text |
 | `DeudaID` | Single line text |
 
@@ -144,7 +144,7 @@ Ese valor debe coincidir con `USER_ID` o `ADMIN_TELEGRAM_USER_ID` en el `.env`.
 | `TenantID` | Single line text |
 | `ID` | Number, precision 0 |
 | `Descripcion` | Single line text |
-| `Tipo` | Single select: `Credito`, `Crédito`, `Servicio` |
+| `Tipo` | Single select: `Crédito`, `Crédito`, `Servicio` |
 | `MontoTotal` | Number, precision 2 |
 | `Moneda` | Single select: `PEN`, `USD` |
 | `MontoPagado` | Number, precision 2 |
