@@ -332,6 +332,7 @@ class MobileAPIHandler(tornado.web.RequestHandler):
                 payload = get_transactions_payload(
                     tenant_id,
                     limit=int(self.get_query_argument("limit", "50")),
+                    offset=int(self.get_query_argument("offset", "0")),
                     date_from=self.get_query_argument("from", None),
                     date_to=self.get_query_argument("to", None),
                 )
