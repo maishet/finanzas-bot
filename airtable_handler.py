@@ -1528,6 +1528,7 @@ def crear_deuda_ciclo(nombre_cuenta, periodo, fecha_venc=None, descripcion=None,
     set_if_present("Moneda", moneda.upper())
     set_if_present("MontoPagado", 0.00)
     set_if_present("FechaVencimiento", fecha_venc.strftime("%Y-%m-%d") if fecha_venc else None)
+    set_if_present("FechaCorte", fecha_venc.strftime("%Y-%m-%d") if fecha_venc else None)
     set_if_present("Estado", "Activa")
     set_if_present("CuentaAsociada", nombre_cuenta)
     set_if_present("Periodo", periodo)
