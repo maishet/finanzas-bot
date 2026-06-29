@@ -1,0 +1,4 @@
+from repositories.airtable_repository import AirtableFinanceRepository
+
+
+default_finance_repository = AirtableFinanceRepository()
