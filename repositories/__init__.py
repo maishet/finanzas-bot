@@ -1,4 +1,3 @@
-from repositories.airtable_repository import AirtableFinanceRepository
 import config
 
 
@@ -6,6 +5,7 @@ def build_finance_repository(backend="airtable"):
     if str(backend or "airtable").lower() in {"postgres", "supabase"}:
         from repositories.postgres_repository import PostgresFinanceRepository
         return PostgresFinanceRepository()
+    from repositories.airtable_repository import AirtableFinanceRepository
     return AirtableFinanceRepository()
 
 

@@ -98,6 +98,28 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(result["total_pasivos"], 0.0)
         self.assertEqual(result["patrimonio"], 100.0)
 
+    def test_postgres_create_transaction_updates_account_and_audit(self):
+        connection = FakeConnection([
+            [("tenant-uuid",)],
+            [("account-uuid",)],
+            [("category-uuid",)],
+            [("transaction-uuid",)],
+        ])
+        repository = PostgresFinanceRepository(connection_factory=lambda: connection)
+
+        result = repository.create_transaction("TEN_TEST", {"tipo": "Gasto", "monto": 10, "categoria": "Food", "cuenta": "BCP", "moneda": "PEN"})
+
+        self.assertEqual(result, "transaction-uuid")
+        executed_sql = "\n".join(sql for sql, _ in connection.executed)
+        self.assertIn("insert into transactions", executed_sql)
+        self.assertIn("update accounts set current_balance", executed_sql)
+        self.assertIn("insert into audit_logs", executed_sql)
+
+    def test_postgres_snapshot_is_disabled(self):
+        repository = PostgresFinanceRepository(connection_factory=lambda: FakeConnection([]))
+
+        self.assertEqual(repository.create_snapshot("TEN_TEST"), {"created": False, "reason": "snapshots_disabled"})
+
 
 if __name__ == "__main__":
     unittest.main()

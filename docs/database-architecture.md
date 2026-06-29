@@ -24,9 +24,9 @@ erDiagram
   tenants ||--o{ transactions : has
   tenants ||--o{ debts : has
   tenants ||--o{ pending_movements : has
-  tenants ||--o{ balance_snapshots : has
   tenants ||--o{ auth_codes : has
   tenants ||--o{ connected_sources : has
+  tenants ||--o{ connected_source_filters : has
   tenants ||--o{ audit_logs : has
 
   accounts ||--o{ transactions : records
@@ -36,6 +36,7 @@ erDiagram
   accounts ||--o{ debt_payments : pays_from
   pending_movements ||--o| transactions : confirms_into
   connected_sources ||--o{ pending_movements : detects
+  connected_sources ||--o{ connected_source_filters : filters
 
   tenants {
     uuid id PK
@@ -157,24 +158,31 @@ erDiagram
   connected_sources {
     uuid id PK
     uuid tenant_id FK
+    uuid user_id FK
     text source_type
     text provider
     text external_account_id
+    text email_address
+    text[] label_ids
+    text[] allowed_senders
+    jsonb filter_config
+    text watch_history_id
+    timestamptz watch_expires_at
     text status
     timestamptz last_sync_at
     timestamptz created_at
     timestamptz updated_at
   }
 
-  balance_snapshots {
+  connected_source_filters {
     uuid id PK
     uuid tenant_id FK
-    date snapshot_date
-    numeric total_assets
-    numeric total_liabilities
-    numeric net_worth
-    text origin
+    uuid connected_source_id FK
+    text filter_type
+    text filter_value
+    boolean is_active
     timestamptz created_at
+    timestamptz updated_at
   }
 
   auth_codes {
@@ -214,6 +222,21 @@ erDiagram
 - `pending_movement.status`: `pending`, `confirmed`, `discarded`
 - `connected_source.source_type`: `gmail`, `outlook`, `telegram`, `manual`, `bank_integration`
 - `connected_source.status`: `active`, `paused`, `error`, `revoked`
+- `connected_source_filter.filter_type`: `sender_email`, `subject_contains`, `body_contains`, `account_hint`, `currency_hint`
+
+## Gmail Source Model
+
+Users can connect Gmail sources per tenant. Gmail watches and filters should be stored in `connected_sources` and `connected_source_filters`:
+
+- `connected_sources.email_address`: Gmail account connected by the user.
+- `connected_sources.label_ids`: Gmail labels watched, defaulting to `INBOX`.
+- `connected_sources.allowed_senders`: fast allow-list for common sender filters.
+- `connected_sources.filter_config`: provider-specific settings such as parsing rules, default account hints, or confidence thresholds.
+- `connected_sources.watch_history_id`: latest Gmail history ID for push renewal.
+- `connected_sources.watch_expires_at`: Gmail watch expiration to renew before expiry.
+- `connected_source_filters`: normalized user-configurable filters for sender, subject, body, account hints, and currency hints.
+
+Historical balance snapshots are intentionally excluded from the Supabase model.
 
 ## Migration Notes From Airtable
 

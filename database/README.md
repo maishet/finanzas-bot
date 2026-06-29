@@ -16,4 +16,5 @@ This folder contains the target Supabase/Postgres schema for Fint.
 
 ## Initial Migration
 
-- `001_initial_schema.sql` creates tenants, users, memberships, accounts, categories, transactions, debts, debt payments, pending movements, connected sources, balance snapshots, auth codes, and audit logs.
+- `001_initial_schema.sql` creates tenants, users, memberships, accounts, categories, transactions, debts, debt payments, pending movements, connected sources, auth codes, and audit logs.
+- `002_cutover_supabase_actions_and_gmail_sources.sql` removes historical snapshots, adds Gmail source filters, and enables defensive RLS policies for backend service access.

@@ -96,6 +96,36 @@ class PostgresFinanceRepository:
             raise ValueError(f"tenant not found: {tenant_id}")
         return str(_value(row, "id", 0))
 
+    def _audit(self, cursor, tenant_uuid: str, action: str, entity_type: str, entity_id: Any, metadata: str = "{}"):
+        cursor.execute(
+            "insert into audit_logs (tenant_id, action, entity_type, entity_id, metadata) values (%s, %s, %s, %s, %s::jsonb)",
+            (tenant_uuid, action, entity_type, entity_id, metadata),
+        )
+
+    def _account_id(self, cursor, tenant_uuid: str, account_name: str) -> Any:
+        if not account_name:
+            return None
+        cursor.execute("select id from accounts where tenant_id = %s and name = %s and status = 'active' limit 1", (tenant_uuid, account_name))
+        row = cursor.fetchone()
+        return _value(row, "id", 0) if row else None
+
+    def _category_id(self, cursor, tenant_uuid: str, category_name: str, transaction_type: str) -> Any:
+        name = category_name or "Other"
+        cursor.execute("select id from categories where tenant_id = %s and lower(name) = lower(%s) and transaction_type = %s limit 1", (tenant_uuid, name, transaction_type))
+        row = cursor.fetchone()
+        if row:
+            return _value(row, "id", 0)
+        cursor.execute("insert into categories (tenant_id, name, transaction_type, is_active) values (%s, %s, %s, true) returning id", (tenant_uuid, name, transaction_type))
+        return _value(cursor.fetchone(), "id", 0)
+
+    def _apply_account_delta(self, cursor, tenant_uuid: str, account_id: Any, transaction_type: str, amount: float, reverse: bool = False):
+        if not account_id:
+            return
+        delta = amount if transaction_type == "income" else -amount
+        if reverse:
+            delta = -delta
+        cursor.execute("update accounts set current_balance = current_balance + %s, updated_at = now() where tenant_id = %s and id = %s", (delta, tenant_uuid, account_id))
+
     def get_accounts_summary(self, tenant_id: str) -> dict[str, Any]:
         tenant_uuid = self._tenant_uuid(tenant_id)
         rows = self._fetchall(
@@ -270,65 +300,155 @@ class PostgresFinanceRepository:
         transaction_date = _date_value(payload.get("fecha"))
         account_name = str(payload.get("cuenta", "")).strip()
         category_name = str(payload.get("categoria_input", "")).strip()
-        row = self._execute(
-            """
-            insert into transactions (tenant_id, account_id, category_id, transaction_date, transaction_type, amount, currency, payment_method, note)
-            values (
-              %s,
-              (select id from accounts where tenant_id = %s and name = %s limit 1),
-              (select id from categories where tenant_id = %s and name = %s and transaction_type = %s limit 1),
-              %s, %s, %s, %s, %s, %s
-            )
-            returning id
-            """,
-            (tenant_uuid, tenant_uuid, account_name, tenant_uuid, category_name, transaction_type, transaction_date, transaction_type, parse_number(payload.get("monto", 0)), str(payload.get("moneda", "PEN")).upper(), str(payload.get("metodo", "")), str(payload.get("nota", ""))),
-        )
-        return str(_value(row, "id", 0, ""))
+        amount = parse_number(payload.get("monto", 0))
+        currency = str(payload.get("moneda", "PEN")).upper()
+        with self.connection_factory() as conn:
+            with conn.cursor() as cursor:
+                account_id = self._account_id(cursor, tenant_uuid, account_name)
+                category_id = self._category_id(cursor, tenant_uuid, category_name, transaction_type)
+                cursor.execute(
+                    """
+                    insert into transactions (tenant_id, account_id, category_id, transaction_date, transaction_type, amount, currency, payment_method, note)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    returning id
+                    """,
+                    (tenant_uuid, account_id, category_id, transaction_date, transaction_type, amount, currency, str(payload.get("metodo", "")), str(payload.get("nota", ""))),
+                )
+                transaction_id = _value(cursor.fetchone(), "id", 0, "")
+                self._apply_account_delta(cursor, tenant_uuid, account_id, transaction_type, amount)
+                self._audit(cursor, tenant_uuid, "transaction.created", "transaction", transaction_id)
+            conn.commit()
+        return str(transaction_id)
 
     def update_transaction(self, tenant_id: str, transaction_id: str, field: str, value: Any) -> Any:
         tenant_uuid = self._tenant_uuid(tenant_id)
-        allowed = {"nota": "note", "metodo": "payment_method"}
-        column = allowed.get(normalize_text(field))
-        if not column:
-            raise ValueError("field is not supported by Postgres repository yet")
-        return self._execute(f"update transactions set {column} = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (value, tenant_uuid, transaction_id))
+        normalized_field = normalize_text(field)
+        with self.connection_factory() as conn:
+            with conn.cursor() as cursor:
+                if normalized_field in {"nota", "note"}:
+                    cursor.execute("update transactions set note = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (value, tenant_uuid, transaction_id))
+                elif normalized_field in {"metodo", "payment_method"}:
+                    cursor.execute("update transactions set payment_method = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (value, tenant_uuid, transaction_id))
+                elif normalized_field in {"categoria", "category"}:
+                    cursor.execute("select transaction_type from transactions where tenant_id = %s and id = %s and status = 'posted'", (tenant_uuid, transaction_id))
+                    row = cursor.fetchone()
+                    if not row:
+                        raise ValueError("transaction not found")
+                    category_id = self._category_id(cursor, tenant_uuid, str(value).strip(), str(_value(row, "transaction_type", 0, "expense")))
+                    cursor.execute("update transactions set category_id = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (category_id, tenant_uuid, transaction_id))
+                else:
+                    raise ValueError("field is not supported by Postgres repository")
+                result = cursor.fetchone()
+                self._audit(cursor, tenant_uuid, "transaction.updated", "transaction", transaction_id)
+            conn.commit()
+        return result
 
     def delete_transaction(self, tenant_id: str, transaction_id: str) -> Any:
         tenant_uuid = self._tenant_uuid(tenant_id)
-        return self._execute("update transactions set status = 'voided', updated_at = now() where tenant_id = %s and id = %s returning id", (tenant_uuid, transaction_id))
+        with self.connection_factory() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("select account_id, transaction_type, amount from transactions where tenant_id = %s and id = %s and status = 'posted'", (tenant_uuid, transaction_id))
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError("transaction not found")
+                account_id = _value(row, "account_id", 0)
+                transaction_type = str(_value(row, "transaction_type", 1, "expense"))
+                amount = parse_number(_value(row, "amount", 2, 0))
+                self._apply_account_delta(cursor, tenant_uuid, account_id, transaction_type, amount, reverse=True)
+                cursor.execute("update transactions set status = 'voided', updated_at = now() where tenant_id = %s and id = %s returning id", (tenant_uuid, transaction_id))
+                result = cursor.fetchone()
+                self._audit(cursor, tenant_uuid, "transaction.voided", "transaction", transaction_id)
+            conn.commit()
+        return result
 
     def pay_debt(self, tenant_id: str, debt_id: str, payload: dict[str, Any]) -> Any:
         tenant_uuid = self._tenant_uuid(tenant_id)
         amount = parse_number(payload.get("monto", 0))
-        return self._execute(
-            """
-            update debts
-            set outstanding_amount = greatest(outstanding_amount - %s, 0),
-                status = case when greatest(outstanding_amount - %s, 0) = 0 then 'paid' else status end,
-                updated_at = now()
-            where tenant_id = %s and id = %s
-            returning id
-            """,
-            (amount, amount, tenant_uuid, debt_id),
-        )
+        currency = str(payload.get("moneda_pago", payload.get("moneda", "PEN"))).upper()
+        account_name = str(payload.get("cuenta_banco", payload.get("cuenta", ""))).strip()
+        note = str(payload.get("nota", "")).strip()
+        with self.connection_factory() as conn:
+            with conn.cursor() as cursor:
+                account_id = self._account_id(cursor, tenant_uuid, account_name)
+                cursor.execute("select description from debts where tenant_id = %s and id = %s", (tenant_uuid, debt_id))
+                debt = cursor.fetchone()
+                if not debt:
+                    raise ValueError("debt not found")
+                category_id = self._category_id(cursor, tenant_uuid, "Debt payment", "expense")
+                cursor.execute(
+                    """
+                    insert into transactions (tenant_id, account_id, category_id, debt_id, transaction_date, transaction_type, amount, currency, payment_method, note)
+                    values (%s, %s, %s, %s, current_date, 'expense', %s, %s, %s, %s)
+                    returning id
+                    """,
+                    (tenant_uuid, account_id, category_id, debt_id, amount, currency, account_name, note),
+                )
+                transaction_id = _value(cursor.fetchone(), "id", 0)
+                cursor.execute(
+                    "insert into debt_payments (tenant_id, debt_id, account_id, transaction_id, amount, currency, note) values (%s, %s, %s, %s, %s, %s, %s) returning id",
+                    (tenant_uuid, debt_id, account_id, transaction_id, amount, currency, note),
+                )
+                payment_id = _value(cursor.fetchone(), "id", 0)
+                cursor.execute(
+                    """
+                    update debts
+                    set outstanding_amount = greatest(outstanding_amount - %s, 0),
+                        status = case when greatest(outstanding_amount - %s, 0) = 0 then 'paid' else status end,
+                        updated_at = now()
+                    where tenant_id = %s and id = %s
+                    returning id
+                    """,
+                    (amount, amount, tenant_uuid, debt_id),
+                )
+                result = cursor.fetchone()
+                self._apply_account_delta(cursor, tenant_uuid, account_id, "expense", amount)
+                self._audit(cursor, tenant_uuid, "debt.payment_created", "debt_payment", payment_id)
+            conn.commit()
+        return result
 
     def confirm_pending_movement(self, tenant_id: str, pending_id: str, category: str, note: str = "") -> Any:
         tenant_uuid = self._tenant_uuid(tenant_id)
-        return self._execute("update pending_movements set status = 'confirmed', observation = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (note, tenant_uuid, pending_id))
+        with self.connection_factory() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "select account_hint, transaction_type, amount, currency, description from pending_movements where tenant_id = %s and id = %s and status = 'pending'",
+                    (tenant_uuid, pending_id),
+                )
+                pending = cursor.fetchone()
+                if not pending:
+                    raise ValueError("pending movement not found")
+                account_name = str(_value(pending, "account_hint", 0, "") or "")
+                transaction_type = str(_value(pending, "transaction_type", 1, "expense"))
+                amount = parse_number(_value(pending, "amount", 2, 0))
+                currency = str(_value(pending, "currency", 3, "PEN"))
+                description = str(_value(pending, "description", 4, ""))
+                account_id = self._account_id(cursor, tenant_uuid, account_name)
+                category_id = self._category_id(cursor, tenant_uuid, category, transaction_type)
+                cursor.execute(
+                    """
+                    insert into transactions (tenant_id, account_id, category_id, pending_movement_id, transaction_date, transaction_type, amount, currency, payment_method, note)
+                    values (%s, %s, %s, %s, current_date, %s, %s, %s, %s, %s)
+                    returning id
+                    """,
+                    (tenant_uuid, account_id, category_id, pending_id, transaction_type, amount, currency, account_name, note or description),
+                )
+                transaction_id = _value(cursor.fetchone(), "id", 0)
+                self._apply_account_delta(cursor, tenant_uuid, account_id, transaction_type, amount)
+                cursor.execute("update pending_movements set status = 'confirmed', confirmed_transaction_id = %s, observation = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (transaction_id, note, tenant_uuid, pending_id))
+                result = cursor.fetchone()
+                self._audit(cursor, tenant_uuid, "pending.confirmed", "pending_movement", pending_id)
+            conn.commit()
+        return result
 
     def discard_pending_movement(self, tenant_id: str, pending_id: str, reason: str = "") -> Any:
         tenant_uuid = self._tenant_uuid(tenant_id)
-        return self._execute("update pending_movements set status = 'discarded', observation = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (reason, tenant_uuid, pending_id))
+        with self.connection_factory() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("update pending_movements set status = 'discarded', observation = %s, updated_at = now() where tenant_id = %s and id = %s returning id", (reason, tenant_uuid, pending_id))
+                result = cursor.fetchone()
+                self._audit(cursor, tenant_uuid, "pending.discarded", "pending_movement", pending_id)
+            conn.commit()
+        return result
 
     def create_snapshot(self, tenant_id: str, origin: str = "Mobile", date: Any = None) -> Any:
-        tenant_uuid = self._tenant_uuid(tenant_id)
-        summary = self.get_accounts_summary(tenant_id)
-        snapshot_date = _date_value(date)
-        return self._execute(
-            """
-            insert into balance_snapshots (tenant_id, snapshot_date, total_assets, total_liabilities, net_worth, origin)
-            values (%s, %s, %s, %s, %s, %s)
-            returning id
-            """,
-            (tenant_uuid, snapshot_date, summary["total_activos"], summary["total_pasivos"], summary["patrimonio"], origin.lower()),
-        )
+        return {"created": False, "reason": "snapshots_disabled"}

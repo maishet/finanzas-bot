@@ -209,7 +209,6 @@ Endpoints futuros:
 - `POST /api/debts/{id}/pay`
 - `POST /api/pending-movements/{id}/confirm`
 - `POST /api/pending-movements/{id}/discard`
-- `POST /api/snapshots`
 
 Regla critica:
 
@@ -278,9 +277,9 @@ transactions
 debts
 pending_movements
 gmail_state
-balance_snapshots
 auth_codes
 audit_logs
+connected_source_filters
 ```
 
 Tareas:

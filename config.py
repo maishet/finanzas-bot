@@ -23,14 +23,16 @@ SYSTEM_TENANT_ID = os.getenv("SYSTEM_TENANT_ID", f"TEN_TG_{ADMIN_TELEGRAM_USER_I
 if not SYSTEM_TENANT_ID:
     raise ValueError("SYSTEM_TENANT_ID no puede estar vacío")
 
-# Airtable como única fuente de datos
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-if not AIRTABLE_BASE_ID:
-    raise ValueError("No se encontró AIRTABLE_BASE_ID en variables de entorno")
+# Storage backend. Supabase/Postgres is the target store; Airtable remains available only as legacy fallback.
+FINANCE_REPOSITORY_BACKEND = os.getenv("FINANCE_REPOSITORY_BACKEND", "airtable").strip().lower()
 
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID", "").strip()
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY", "").strip()
-if not AIRTABLE_API_KEY:
-    raise ValueError("No se encontró AIRTABLE_API_KEY en variables de entorno")
+if FINANCE_REPOSITORY_BACKEND == "airtable":
+    if not AIRTABLE_BASE_ID:
+        raise ValueError("No se encontró AIRTABLE_BASE_ID en variables de entorno")
+    if not AIRTABLE_API_KEY:
+        raise ValueError("No se encontró AIRTABLE_API_KEY en variables de entorno")
 
 # Moneda base
 BASE_CURRENCY = "PEN"
@@ -105,4 +107,3 @@ MOBILE_OTP_MAX_ATTEMPTS = int(os.getenv("MOBILE_OTP_MAX_ATTEMPTS", "5"))
 # Supabase/Postgres future store. Airtable remains default until migration cutover.
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 SUPABASE_DATABASE_URL = os.getenv("SUPABASE_DATABASE_URL", DATABASE_URL).strip()
-FINANCE_REPOSITORY_BACKEND = os.getenv("FINANCE_REPOSITORY_BACKEND", "airtable").strip().lower()

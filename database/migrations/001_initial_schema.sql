@@ -152,17 +152,6 @@ create table if not exists debt_payments (
   created_at timestamptz not null default now()
 );
 
-create table if not exists balance_snapshots (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references tenants(id) on delete cascade,
-  snapshot_date date not null default current_date,
-  total_assets numeric(14,2) not null default 0,
-  total_liabilities numeric(14,2) not null default 0,
-  net_worth numeric(14,2) not null default 0,
-  origin text not null default 'manual',
-  created_at timestamptz not null default now()
-);
-
 create table if not exists auth_codes (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id) on delete cascade,
@@ -192,5 +181,4 @@ create index if not exists idx_transactions_tenant_date on transactions(tenant_i
 create index if not exists idx_transactions_tenant_category on transactions(tenant_id, category_id);
 create index if not exists idx_debts_tenant_status_due on debts(tenant_id, status, due_date);
 create index if not exists idx_pending_movements_tenant_status on pending_movements(tenant_id, status, detected_at desc);
-create index if not exists idx_balance_snapshots_tenant_date on balance_snapshots(tenant_id, snapshot_date desc);
 create index if not exists idx_audit_logs_tenant_created on audit_logs(tenant_id, created_at desc);
