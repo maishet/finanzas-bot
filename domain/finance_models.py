@@ -23,10 +23,12 @@ def normalize_account_type(value):
 
 def normalize_status(value, default="active"):
     normalized = normalize_text(value)
-    if normalized in {"activo", "active"}:
+    if normalized in {"activo", "activa", "active"}:
         return "active"
     if normalized in {"pagado", "paid"}:
         return "paid"
+    if normalized in {"vencida", "vencido", "overdue"}:
+        return "overdue"
     if normalized in {"pendiente", "pending"}:
         return "pending"
     if normalized in {"confirmado", "confirmed"}:

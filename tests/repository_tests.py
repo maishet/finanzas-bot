@@ -2,6 +2,47 @@ import unittest
 from unittest.mock import Mock, patch
 
 from repositories.airtable_repository import AirtableFinanceRepository
+from repositories.postgres_repository import PostgresFinanceRepository
+
+
+class FakeCursor:
+    def __init__(self, connection):
+        self.connection = connection
+        self.current = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=()):
+        self.connection.executed.append((sql, params))
+        self.current = self.connection.responses.pop(0) if self.connection.responses else []
+
+    def fetchall(self):
+        return self.current
+
+    def fetchone(self):
+        return self.current[0] if self.current else None
+
+
+class FakeConnection:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.executed = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return FakeCursor(self)
+
+    def commit(self):
+        pass
 
 
 class RepositoryTests(unittest.TestCase):
@@ -32,6 +73,30 @@ class RepositoryTests(unittest.TestCase):
 
         self.assertEqual(result, "TX00001")
         add_transaction.assert_called_once_with(tenant_id="TEN_TEST", tipo="Gasto", monto=10)
+
+    def test_postgres_list_categories_maps_to_mobile_contract(self):
+        connection = FakeConnection([
+            [("tenant-uuid",)],
+            [("Sueldo", "income", "briefcase-outline")],
+        ])
+        repository = PostgresFinanceRepository(connection_factory=lambda: connection)
+
+        result = repository.list_categories("TEN_TEST", category_type="Ingreso")
+
+        self.assertEqual(result, [{"original": "Sueldo", "tipo": "Ingreso", "subcategorias": "", "icono": "briefcase-outline"}])
+
+    def test_postgres_accounts_summary_maps_totals(self):
+        connection = FakeConnection([
+            [("tenant-uuid",)],
+            [("BCP", "bank_account", "PEN", 100), ("Visa", "credit_card", "PEN", -30)],
+        ])
+        repository = PostgresFinanceRepository(connection_factory=lambda: connection)
+
+        result = repository.get_accounts_summary("TEN_TEST")
+
+        self.assertEqual(result["total_activos"], 100)
+        self.assertEqual(result["total_pasivos"], 0.0)
+        self.assertEqual(result["patrimonio"], 100.0)
 
 
 if __name__ == "__main__":

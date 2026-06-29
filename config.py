@@ -101,3 +101,8 @@ MOBILE_JWT_SECRET = os.getenv("MOBILE_JWT_SECRET", MOBILE_API_KEY).strip()
 MOBILE_JWT_EXPIRES_HOURS = int(os.getenv("MOBILE_JWT_EXPIRES_HOURS", "168"))
 MOBILE_OTP_EXPIRES_MINUTES = int(os.getenv("MOBILE_OTP_EXPIRES_MINUTES", "10"))
 MOBILE_OTP_MAX_ATTEMPTS = int(os.getenv("MOBILE_OTP_MAX_ATTEMPTS", "5"))
+
+# Supabase/Postgres future store. Airtable remains default until migration cutover.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+SUPABASE_DATABASE_URL = os.getenv("SUPABASE_DATABASE_URL", DATABASE_URL).strip()
+FINANCE_REPOSITORY_BACKEND = os.getenv("FINANCE_REPOSITORY_BACKEND", "airtable").strip().lower()

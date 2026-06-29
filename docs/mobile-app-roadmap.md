@@ -259,6 +259,14 @@ Reglas:
 
 Objetivo: migrar a base relacional cuando API y app esten estables.
 
+Estrategia confirmada:
+
+- Airtable sigue siendo el store activo por defecto.
+- Postgres/Supabase se introduce como repository paralelo.
+- El schema relacional usa tablas, columnas y valores internos en ingles.
+- La migracion se valida por tenant antes de cualquier corte.
+- El corte de repository se controla con `FINANCE_REPOSITORY_BACKEND=postgres|supabase` solo cuando la data este validada.
+
 Tablas futuras:
 
 ```text
@@ -285,6 +293,23 @@ Tareas:
 6. Probar backend contra Supabase.
 7. Cortar trafico a Supabase.
 8. Mantener Airtable como backup temporal.
+
+Herramientas iniciales:
+
+```text
+database/migrations/001_initial_schema.sql
+scripts/run_postgres_migrations.py
+scripts/migrate_airtable_to_postgres.py
+scripts/validate_postgres_migration.py
+repositories/postgres_repository.py
+```
+
+Variables futuras:
+
+```text
+SUPABASE_DATABASE_URL=postgres://...
+FINANCE_REPOSITORY_BACKEND=airtable|postgres|supabase
+```
 
 ## Arquitectura Objetivo De Largo Plazo
 

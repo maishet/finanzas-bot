@@ -243,3 +243,16 @@ The current Python phase introduces the boundary incrementally. The future TypeS
 - `utils/finance_format.py` contains reusable parsing/normalization helpers independent from Airtable.
 - Mobile API payloads remain backward-compatible while services map internal normalized records to current response shapes.
 - Direct repository tests cover idempotent category creation and adapter delegation.
+
+## Phase 7 Migration Workflow
+
+1. Create a Supabase/Postgres database.
+2. Set `SUPABASE_DATABASE_URL` locally; do not change Render yet.
+3. Run `python scripts/run_postgres_migrations.py`.
+4. Run `python scripts/migrate_airtable_to_postgres.py --tenant-id <TENANT_ID>` for dry-run counts.
+5. Run `python scripts/migrate_airtable_to_postgres.py --tenant-id <TENANT_ID> --apply` only after reviewing counts.
+6. Run `python scripts/validate_postgres_migration.py --tenant-id <TENANT_ID>` until all totals match.
+7. Test API locally with `FINANCE_REPOSITORY_BACKEND=postgres`.
+8. Switch production only after tenant validation, API smoke tests, and rollback plan are complete.
+
+Current state: the schema, migration runner, validation report, and parallel `PostgresFinanceRepository` exist. Airtable remains the default active backend.
